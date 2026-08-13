@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tibero-doc"
+version = "0.1.0"
+description = "CLI for the OpenSQL-based AI document platform"
+requires-python = ">=3.11"
+
+dependencies = [
+    "typer",
+    "httpx",
+    "rich"
+]
+
+[project.scripts]
+tibero-doc = "tibero_doc.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
