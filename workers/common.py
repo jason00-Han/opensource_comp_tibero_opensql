@@ -14,9 +14,9 @@ from packages.core.pipeline.routing import queue_for
 
 LOGGER = logging.getLogger(__name__)
 
+
 def consume_jobs(job_type: JobType, process: Callable[[str], object]) -> None:
     """Consume one worker type's durable queue; safe to run in many processes."""
-
     broker = RabbitMQPublisher()
     queue_name = queue_for(job_type)
     connection = pika.BlockingConnection(pika.URLParameters(broker.url))

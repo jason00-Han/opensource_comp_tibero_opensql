@@ -4,11 +4,14 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
 
+import fcntl
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
@@ -42,6 +45,15 @@ class DocumentRecord:
     checksum: str
     size: int
     chunk_count: int
+
+
+@dataclass(frozen=True)
+class StoredDocument:
+    document_id: str
+    filename: str
+    checksum: str
+    size: int
+    path: str
 
 
 def _normalize_text(text: str) -> str:
@@ -92,7 +104,17 @@ class DocumentStore:
         self.data_dir = data_dir or (Path(configured) if configured else Path.home() / ".tibero-doc" / "data")
         self.upload_dir = self.data_dir / "uploads"
         self.index_file = self.data_dir / "index.json"
+        self.index_lock_file = self.data_dir / "index.lock"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def _index_lock(self):
+        with self.index_lock_file.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
     def _load(self) -> dict:
         if not self.index_file.exists():
@@ -104,11 +126,18 @@ class DocumentStore:
 
     def _save(self, index: dict) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self.index_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.index_file)
+        descriptor, temporary_name = tempfile.mkstemp(dir=self.data_dir, prefix="index-", suffix=".tmp")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:
+                json.dump(index, temporary, ensure_ascii=False, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            Path(temporary_name).replace(self.index_file)
+        finally:
+            Path(temporary_name).unlink(missing_ok=True)
 
-    def ingest_bytes(self, filename: str, content: bytes) -> DocumentRecord:
+    def save_upload(self, filename: str, content: bytes) -> StoredDocument:
+        """Validate and persist an upload without performing expensive indexing."""
         safe_name = Path(filename).name
         suffix = Path(safe_name).suffix.lower()
         if suffix not in SUPPORTED_EXTENSIONS:
@@ -116,15 +145,31 @@ class DocumentStore:
         if not content:
             raise ValueError("빈 파일은 업로드할 수 없습니다.")
 
+        checksum = hashlib.sha256(content).hexdigest()
         target = self.upload_dir / safe_name
         target.write_bytes(content)
+        return StoredDocument(checksum[:16], safe_name, checksum, len(content), str(target))
+
+    def ingest_bytes(self, filename: str, content: bytes) -> DocumentRecord:
+        stored = self.save_upload(filename, content)
+        target = Path(stored.path)
         try:
             return self._index_file(target)
         except Exception:
             target.unlink(missing_ok=True)
             raise
 
+    def index_upload(self, filename: str) -> DocumentRecord:
+        path = self.upload_dir / Path(filename).name
+        if not path.is_file():
+            raise ValueError(f"업로드 파일을 찾을 수 없습니다: {filename}")
+        return self._index_file(path)
+
     def _index_file(self, path: Path) -> DocumentRecord:
+        with self._index_lock():
+            return self._index_file_unlocked(path)
+
+    def _index_file_unlocked(self, path: Path) -> DocumentRecord:
         content = path.read_bytes()
         checksum = hashlib.sha256(content).hexdigest()
         document_id = checksum[:16]
@@ -166,7 +211,14 @@ class DocumentStore:
             })
         return sorted(results, key=lambda item: item["score"], reverse=True)[:top_k]
 
+    def chunks_for_document(self, document_id: str) -> list[dict]:
+        return [chunk for chunk in self._load()["chunks"] if chunk["document_id"] == document_id]
+
     def sync(self) -> dict[str, int]:
+        with self._index_lock():
+            return self._sync_unlocked()
+
+    def _sync_unlocked(self) -> dict[str, int]:
         index = self._load()
         known = {item["filename"]: item for item in index["documents"]}
         current = {
@@ -179,10 +231,10 @@ class DocumentStore:
             checksum = hashlib.sha256(path.read_bytes()).hexdigest()
             previous = known.get(filename)
             if previous is None:
-                self._index_file(path)
+                self._index_file_unlocked(path)
                 added += 1
             elif previous["checksum"] != checksum:
-                self._index_file(path)
+                self._index_file_unlocked(path)
                 updated += 1
             else:
                 skipped += 1

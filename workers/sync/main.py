@@ -5,7 +5,11 @@ import os
 
 from packages.core.pipeline import JobType, JsonJobRepository, PipelineService
 from services.api.store import DocumentStore
-from workers.common import LOGGER, consume_jobs
+from workers.common import consume_jobs
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 class SyncJobProcessor:
     def __init__(self, jobs: JsonJobRepository | None = None, documents: DocumentStore | None = None) -> None:
@@ -16,10 +20,8 @@ class SyncJobProcessor:
         job = self.pipeline.get(job_id)
         if job is None:
             raise KeyError(f"Unknown job: {job_id}")
-
         if job.status.is_final:
             return job.to_dict()
-        
         if job.type != JobType.SYNC_DOCUMENTS:
             raise ValueError(f"Sync worker cannot process: {job.type}")
 
@@ -28,14 +30,14 @@ class SyncJobProcessor:
             result = self.documents.sync()
         except Exception as exc:
             LOGGER.exception("Sync job %s failed", job_id)
-
             return self.pipeline.fail(job_id, str(exc)).to_dict()
         return self.pipeline.complete(job_id, result).to_dict()
+
 
 def run_worker() -> None:
     consume_jobs(JobType.SYNC_DOCUMENTS, SyncJobProcessor().process)
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     run_worker()
-    

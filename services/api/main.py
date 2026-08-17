@@ -9,9 +9,7 @@ from packages.core.pipeline import (
     PipelineService,
     RabbitMQPublisher,
 )
-
 from services.api.store import DocumentStore
-
 
 
 app = FastAPI(
@@ -29,14 +27,18 @@ class SearchRequest(BaseModel):
 def get_store() -> DocumentStore:
     return DocumentStore()
 
+
 def get_job_repository() -> JsonJobRepository:
     return JsonJobRepository()
+
 
 def get_publisher() -> JobPublisher:
     return RabbitMQPublisher()
 
+
 def get_pipeline() -> PipelineService:
     return PipelineService(get_job_repository(), get_publisher())
+
 
 @app.get("/")
 def root() -> dict:
@@ -64,10 +66,10 @@ def health() -> dict:
     }
 
 
-@app.post("/v1/documents", status_code=201)
+@app.post("/v1/documents", status_code=202)
 async def ingest_document(file: UploadFile = File(...)) -> dict:
     try:
-        record = get_store().ingest_bytes(file.filename or "document", await file.read())
+        stored = get_store().save_upload(file.filename or "document", await file.read())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
@@ -93,14 +95,16 @@ def search_documents(request: SearchRequest) -> dict:
         "results": get_store().search(request.query, request.top_k),
     }
 
+
 @app.get("/v1/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
-    job = get_pipeline().get(job_id)
+    job = PipelineService(get_job_repository()).get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
     return job.to_dict()
 
-@app.post("/v1/sync")
+
+@app.post("/v1/sync", status_code=202)
 def sync_documents() -> dict:
     try:
         job = get_pipeline().start(JobType.SYNC_DOCUMENTS, {})

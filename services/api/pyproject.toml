@@ -14,16 +14,17 @@ dependencies = [
     "pypdf>=5,<7",
     "python-docx>=1.1,<2",
     "pika>=1.3,<2",
+    "httpx>=0.28,<1",
+    "mcp>=2,<3",
 ]
 
 [project.optional-dependencies]
 test = [
     "httpx>=0.28,<1",
     "pytest>=8,<10",
+    "psycopg[binary]>=3.2,<4",
 ]
 
-packages = ["services", "services.api", "packages", "packages.core", "packages.core.pipeline", "workers", "workers.ingest", "workers.sync", "workers.embedding"]
-package-dir = {"services" = "..", "services.api" = ".", "packages" = "../../packages", "packages.core" = "../../packages/core", "packages.core.pipeline" = "../../packages/core/pipeline", "workers" = "../../workers", "workers.ingest" = "../../workers/ingest", "workers.sync" = "../../workers/sync", "workers.embedding" = "../../workers/embedding"}
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.setuptools]
+packages = ["services", "services.api", "services.mcp_server", "packages", "packages.core", "packages.core.pipeline", "workers", "workers.ingest", "workers.sync", "workers.embedding"]
+package-dir = {"services" = "..", "services.api" = ".", "services.mcp_server" = "../mcp_server", "packages" = "../../packages", "packages.core" = "../../packages/core", "packages.core.pipeline" = "../../packages/core/pipeline", "workers" = "../../workers", "workers.ingest" = "../../workers/ingest", "workers.sync" = "../../workers/sync", "workers.embedding" = "../../workers/embedding"}

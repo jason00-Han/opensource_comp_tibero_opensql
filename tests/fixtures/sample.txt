@@ -1,0 +1,1 @@
+Tibero Doc integration fixture for document search and chunk indexing.
