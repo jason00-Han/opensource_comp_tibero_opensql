@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-import fcntl
+from filelock import FileLock
 import httpx
+
+from packages.core.database import connect, database_dsn, vector_literal
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,43 @@ class OpenAICompatibleEmbeddingProvider:
         return vectors
 
 
+class LocalHashEmbeddingProvider:
+    """Dependency-free deterministic embedding for an offline demo.
+
+    It hashes words and character trigrams into a fixed vector.  It is useful
+    for running the whole platform without an API key; use an OpenAI-compatible
+    model for production-quality semantic retrieval.
+    """
+
+    def __init__(self, dimensions: int | None = None) -> None:
+        self.dimensions = dimensions or int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
+        self._model = os.getenv("EMBEDDING_MODEL", f"local-hash-{self.dimensions}")
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, text: str) -> list[float]:
+        normalized = re.sub(r"\s+", " ", text.lower()).strip()
+        words = re.findall(r"[0-9a-zA-Z가-힣]+", normalized)
+        features = words + [
+            normalized[index:index + 3]
+            for index in range(max(0, len(normalized) - 2))
+            if " " not in normalized[index:index + 3]
+        ]
+        vector = [0.0] * self.dimensions
+        for feature in features:
+            digest = hashlib.sha256(feature.encode("utf-8")).digest()
+            position = int.from_bytes(digest[:4], "big") % self.dimensions
+            sign = 1.0 if digest[4] & 1 else -1.0
+            vector[position] += sign
+        norm = math.sqrt(sum(value * value for value in vector))
+        return [value / norm for value in vector] if norm else vector
+
+
 class JsonEmbeddingRepository:
     """Local MVP vector repository; replace with the OpenSQL implementation in deployment."""
 
@@ -82,12 +124,8 @@ class JsonEmbeddingRepository:
 
     @contextmanager
     def _locked(self):
-        with self.lock_path.open("a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with FileLock(str(self.lock_path)):
+            yield
 
     def _load(self) -> list[dict]:
         if not self.path.exists():
@@ -112,6 +150,48 @@ class JsonEmbeddingRepository:
                 Path(temporary_name).replace(self.path)
             finally:
                 Path(temporary_name).unlink(missing_ok=True)
+
+
+class OpenSQLEmbeddingRepository:
+    def __init__(self, dsn: str | None = None) -> None:
+        self.dsn = dsn or database_dsn()
+        if not self.dsn:
+            raise RuntimeError("TIBERO_DOC_DSN is not configured")
+
+    def replace_document(self, document_id: str, embeddings: list[ChunkEmbedding]) -> None:
+        with connect(self.dsn) as connection:
+            connection.execute(
+                "DELETE FROM tibero_doc.chunk_embeddings WHERE document_id = %s",
+                (document_id,),
+            )
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO tibero_doc.chunk_embeddings
+                        (document_id, chunk_index, model, dimensions, embedding)
+                    VALUES (%s, %s, %s, %s, %s::vector)
+                    """,
+                    [
+                        (
+                            item.document_id, item.chunk_index, item.model,
+                            len(item.vector), vector_literal(item.vector),
+                        )
+                        for item in embeddings
+                    ],
+                )
+
+
+def embedding_provider_from_env() -> EmbeddingProvider:
+    provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+    if provider in {"openai", "ollama", "http"}:
+        return OpenAICompatibleEmbeddingProvider()
+    if provider in {"local", "hash"}:
+        return LocalHashEmbeddingProvider()
+    raise ValueError(f"Unsupported EMBEDDING_PROVIDER: {provider}")
+
+
+def embedding_repository_from_env() -> EmbeddingRepository:
+    return OpenSQLEmbeddingRepository() if database_dsn() else JsonEmbeddingRepository()
 
 
 class EmbeddingService:

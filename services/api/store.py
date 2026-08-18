@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -11,9 +12,14 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
 
-import fcntl
+from filelock import FileLock
 from docx import Document as DocxDocument
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from pypdf import PdfReader
+
+from packages.core.database import connect, database_dsn, vector_literal
+from packages.core.object_storage import ObjectStorage, object_storage_from_env
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".html", ".htm"}
@@ -45,6 +51,7 @@ class DocumentRecord:
     checksum: str
     size: int
     chunk_count: int
+    version: int = 1
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,7 @@ class StoredDocument:
     checksum: str
     size: int
     path: str
+    object_key: str | None = None
 
 
 def _normalize_text(text: str) -> str:
@@ -109,12 +117,8 @@ class DocumentStore:
 
     @contextmanager
     def _index_lock(self):
-        with self.index_lock_file.open("a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with FileLock(str(self.index_lock_file)):
+            yield
 
     def _load(self) -> dict:
         if not self.index_file.exists():
@@ -187,7 +191,13 @@ class DocumentStore:
         self._save(index)
         return record
 
-    def search(self, query: str, top_k: int) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        query_vector: list[float] | None = None,
+        model: str | None = None,
+    ) -> list[dict]:
         terms = TOKEN_PATTERN.findall(query.lower())
         if not terms:
             return []
@@ -251,3 +261,268 @@ class DocumentStore:
     def stats(self) -> dict[str, int]:
         index = self._load()
         return {"documents": len(index["documents"]), "chunks": len(index["chunks"])}
+
+    def list_documents(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        documents = sorted(self._load()["documents"], key=lambda item: item["filename"])
+        return documents[offset:offset + limit]
+
+    def get_document(self, document_id: str) -> dict | None:
+        return next((item for item in self._load()["documents"] if item["document_id"] == document_id), None)
+
+    def delete_document(self, document_id: str) -> bool:
+        with self._index_lock():
+            index = self._load()
+            target = next((item for item in index["documents"] if item["document_id"] == document_id), None)
+            if target is None:
+                return False
+            index["documents"] = [item for item in index["documents"] if item["document_id"] != document_id]
+            index["chunks"] = [item for item in index["chunks"] if item["document_id"] != document_id]
+            self._save(index)
+            (self.upload_dir / target["filename"]).unlink(missing_ok=True)
+            return True
+
+    def versions(self, filename: str) -> list[dict]:
+        record = next((item for item in self._load()["documents"] if item["filename"] == filename), None)
+        return [record] if record else []
+
+
+class OpenSQLDocumentStore(DocumentStore):
+    """Document, chunk, metadata and hybrid-search repository backed by OpenSQL."""
+
+    def __init__(self, dsn: str | None = None, data_dir: Path | None = None, workspace_id: str | None = None, user_id: str | None = None) -> None:
+        super().__init__(data_dir)
+        self.dsn = dsn or database_dsn()
+        if not self.dsn:
+            raise RuntimeError("TIBERO_DOC_DSN is not configured")
+        self.workspace_id = workspace_id or "00000000-0000-0000-0000-000000000001"
+        self.user_id = user_id or "00000000-0000-0000-0000-000000000001"
+        self.objects: ObjectStorage = object_storage_from_env()
+
+    def save_upload(self, filename: str, content: bytes) -> StoredDocument:
+        stored = super().save_upload(filename, content)
+        object_key = f"{self.workspace_id}/{stored.checksum}/{stored.filename}"
+        self.objects.put(object_key, content, mimetypes.guess_type(stored.filename)[0] or "application/octet-stream")
+        return StoredDocument(stored.document_id, stored.filename, stored.checksum, stored.size, stored.path, object_key)
+
+    def index_upload(self, filename: str, object_key: str | None = None) -> DocumentRecord:
+        path = self.upload_dir / Path(filename).name
+        if not path.is_file() and object_key:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.objects.get(object_key))
+        return super().index_upload(filename)
+
+    def _index_file(self, path: Path) -> DocumentRecord:
+        return self._index_file_unlocked(path)
+
+    def _index_file_unlocked(self, path: Path) -> DocumentRecord:
+        binary = path.read_bytes()
+        checksum = hashlib.sha256(binary).hexdigest()
+        document_id = hashlib.sha256(f"{self.workspace_id}:{checksum}".encode()).hexdigest()[:16]
+        object_key = f"{self.workspace_id}/{checksum}/{path.name}"
+        chunk_values = list(split_text(extract_text(path)))
+        with connect(self.dsn) as connection:
+            previous = connection.execute(
+                "SELECT document_id, checksum, size_bytes, chunk_count, version FROM tibero_doc.documents WHERE workspace_id = %s AND filename = %s",
+                (self.workspace_id, path.name),
+            ).fetchone()
+            if previous and previous[1] == checksum:
+                return DocumentRecord(previous[0], path.name, previous[1], previous[2], previous[3], previous[4])
+            version = (previous[4] + 1) if previous else 1
+            if previous:
+                connection.execute("DELETE FROM tibero_doc.documents WHERE document_id = %s", (previous[0],))
+            metadata = {"extension": path.suffix.lower(), "source": "upload"}
+            connection.execute(
+                """
+                INSERT INTO tibero_doc.documents
+                    (document_id, workspace_id, owner_user_id, filename, checksum, size_bytes, chunk_count, version, metadata, object_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (document_id, self.workspace_id, self.user_id, path.name, checksum, len(binary), len(chunk_values), version, Jsonb(metadata), object_key),
+            )
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO tibero_doc.chunks (document_id, chunk_index, content) VALUES (%s, %s, %s)",
+                    [(document_id, index, content) for index, content in enumerate(chunk_values)],
+                )
+            connection.execute(
+                """
+                INSERT INTO tibero_doc.document_versions
+                    (workspace_id, filename, version, document_id, checksum, size_bytes, chunk_count, metadata, object_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (workspace_id, filename, version) DO NOTHING
+                """,
+                (self.workspace_id, path.name, version, document_id, checksum, len(binary), len(chunk_values), Jsonb(metadata), object_key),
+            )
+        return DocumentRecord(document_id, path.name, checksum, len(binary), len(chunk_values), version)
+
+    def search(self, query: str, top_k: int, query_vector: list[float] | None = None, model: str | None = None) -> list[dict]:
+        candidate_limit = max(top_k * 4, 20)
+        with connect(self.dsn) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                           ts_rank_cd(c.search_vector, websearch_to_tsquery('simple', %s)) AS rank
+                      FROM tibero_doc.chunks c JOIN tibero_doc.documents d USING (document_id)
+                     WHERE d.workspace_id = %s
+                       AND (d.visibility='workspace' OR d.owner_user_id=%s OR EXISTS (
+                         SELECT 1 FROM tibero_doc.document_acl a WHERE a.document_id=d.document_id
+                           AND ((a.principal_type='user' AND a.principal_id=%s)
+                             OR (a.principal_type='group' AND a.principal_id IN (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
+                       AND (c.search_vector @@ websearch_to_tsquery('simple', %s) OR c.content ILIKE %s)
+                     ORDER BY rank DESC, c.document_id, c.chunk_index LIMIT %s
+                    """,
+                    (query, self.workspace_id, self.user_id, self.user_id, self.user_id, query, f"%{query}%", candidate_limit),
+                )
+                keyword_rows = cursor.fetchall()
+                vector_rows: list[dict] = []
+                if query_vector and any(query_vector) and model:
+                    literal = vector_literal(query_vector)
+                    cursor.execute(
+                        """
+                        SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                               e.embedding <=> %s::vector AS distance
+                          FROM tibero_doc.chunk_embeddings e
+                          JOIN tibero_doc.chunks c USING (document_id, chunk_index)
+                          JOIN tibero_doc.documents d USING (document_id)
+                         WHERE d.workspace_id = %s
+                           AND (d.visibility='workspace' OR d.owner_user_id=%s OR EXISTS (
+                             SELECT 1 FROM tibero_doc.document_acl a WHERE a.document_id=d.document_id
+                               AND ((a.principal_type='user' AND a.principal_id=%s)
+                                 OR (a.principal_type='group' AND a.principal_id IN (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
+                           AND e.model = %s AND e.dimensions = %s
+                         ORDER BY e.embedding <=> %s::vector LIMIT %s
+                        """,
+                        (literal, self.workspace_id, self.user_id, self.user_id, self.user_id, model, len(query_vector), literal, candidate_limit),
+                    )
+                    vector_rows = cursor.fetchall()
+        combined: dict[tuple[str, int], dict] = {}
+        for rank, row in enumerate(keyword_rows, start=1):
+            key = (row["document_id"], row["chunk_index"])
+            combined[key] = {
+                "document_id": row["document_id"], "filename": row["filename"],
+                "chunk_index": row["chunk_index"], "content": row["content"],
+                "keyword_rank": rank, "vector_rank": None, "_rrf": 1 / (60 + rank),
+            }
+        for rank, row in enumerate(vector_rows, start=1):
+            key = (row["document_id"], row["chunk_index"])
+            item = combined.setdefault(key, {
+                "document_id": row["document_id"], "filename": row["filename"],
+                "chunk_index": row["chunk_index"], "content": row["content"],
+                "keyword_rank": None, "vector_rank": None, "_rrf": 0.0,
+            })
+            item["vector_rank"] = rank
+            item["_rrf"] += 1 / (60 + rank)
+        results = sorted(combined.values(), key=lambda item: item["_rrf"], reverse=True)[:top_k]
+        for item in results:
+            item["score"] = round(min(1.0, item.pop("_rrf") * 30.5), 6)
+        return results
+
+    def chunks_for_document(self, document_id: str) -> list[dict]:
+        with connect(self.dsn) as connection:
+            rows = connection.execute(
+                "SELECT document_id, chunk_index, content FROM tibero_doc.chunks WHERE document_id = %s ORDER BY chunk_index",
+                (document_id,),
+            ).fetchall()
+        return [{"document_id": row[0], "chunk_index": row[1], "content": row[2]} for row in rows]
+
+    def list_documents(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        with connect(self.dsn) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT document_id, filename, checksum, size_bytes AS size, chunk_count,
+                           version, metadata, object_key, created_at, updated_at
+                      FROM tibero_doc.documents d WHERE workspace_id = %s
+                       AND (d.visibility='workspace' OR d.owner_user_id=%s OR EXISTS (
+                         SELECT 1 FROM tibero_doc.document_acl a WHERE a.document_id=d.document_id
+                           AND ((a.principal_type='user' AND a.principal_id=%s)
+                             OR (a.principal_type='group' AND a.principal_id IN (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
+                      ORDER BY updated_at DESC LIMIT %s OFFSET %s
+                    """,
+                    (self.workspace_id, self.user_id, self.user_id, self.user_id, limit, offset),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+    def get_document(self, document_id: str) -> dict | None:
+        with connect(self.dsn) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT document_id, filename, checksum, size_bytes AS size, chunk_count,
+                           version, metadata, object_key, created_at, updated_at
+                      FROM tibero_doc.documents WHERE workspace_id = %s AND document_id = %s
+                    """,
+                    (self.workspace_id, document_id),
+                )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+
+    def delete_document(self, document_id: str) -> bool:
+        with connect(self.dsn) as connection:
+            row = connection.execute(
+                "DELETE FROM tibero_doc.documents WHERE workspace_id = %s AND document_id = %s RETURNING filename",
+                (self.workspace_id, document_id),
+            ).fetchone()
+        if row:
+            (self.upload_dir / row[0]).unlink(missing_ok=True)
+        return row is not None
+
+    def versions(self, filename: str) -> list[dict]:
+        with connect(self.dsn) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT filename, version, document_id, checksum, size_bytes AS size,
+                           chunk_count, metadata, created_at
+                      FROM tibero_doc.document_versions WHERE workspace_id = %s AND filename = %s ORDER BY version DESC
+                    """,
+                    (self.workspace_id, filename),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+    def download(self, document_id: str) -> tuple[bytes | None, str | None, str]:
+        document = self.get_document(document_id)
+        if not document or not document.get("object_key"):
+            raise FileNotFoundError(document_id)
+        url = self.objects.download_url(document["object_key"])
+        return (None, url, document["filename"]) if url else (self.objects.get(document["object_key"]), None, document["filename"])
+
+    def _sync_unlocked(self) -> dict:
+        known = {item["filename"]: item for item in self.list_documents(10000, 0)}
+        current = {path.name: path for path in self.upload_dir.iterdir() if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS}
+        added = updated = skipped = 0
+        changed_ids: list[str] = []
+        for filename, path in current.items():
+            checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+            previous = known.get(filename)
+            if previous is None or previous["checksum"] != checksum:
+                record = self._index_file_unlocked(path)
+                changed_ids.append(record.document_id)
+                if previous is None:
+                    added += 1
+                else:
+                    updated += 1
+            else:
+                skipped += 1
+        deleted_names = set(known) - set(current)
+        for filename in deleted_names:
+            self.delete_document(known[filename]["document_id"])
+        return {"added": added, "updated": updated, "deleted": len(deleted_names), "skipped": skipped, "document_ids": changed_ids}
+
+    def stats(self) -> dict:
+        with connect(self.dsn) as connection:
+            row = connection.execute(
+                """
+                SELECT (SELECT count(*) FROM tibero_doc.documents WHERE workspace_id = %s),
+                       (SELECT count(*) FROM tibero_doc.chunks c JOIN tibero_doc.documents d USING(document_id) WHERE d.workspace_id = %s),
+                       (SELECT count(*) FROM tibero_doc.chunk_embeddings e JOIN tibero_doc.documents d USING(document_id) WHERE d.workspace_id = %s),
+                       (SELECT count(*) FROM tibero_doc.outbox_events WHERE published_at IS NULL)
+                """,
+                (self.workspace_id, self.workspace_id, self.workspace_id),
+            ).fetchone()
+        return {"documents": row[0], "chunks": row[1], "embeddings": row[2], "pending_events": row[3], "storage": "opensql"}
+
+
+def document_store_from_env(workspace_id: str | None = None, user_id: str | None = None) -> DocumentStore:
+    return OpenSQLDocumentStore(workspace_id=workspace_id, user_id=user_id) if database_dsn() else DocumentStore()
