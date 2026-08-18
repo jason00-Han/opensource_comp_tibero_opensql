@@ -1,0 +1,23 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+admin_port = 6433
+admin_username = "postgres"
+admin_password = "{{POSTGRES_PASSWORD}}"
+connect_timeout = 10000
+
+[pools.opensql]
+pool_mode = "session"
+default_role = "primary"
+query_parser_enabled = false
+
+[pools.opensql.users.0]
+username = "postgres"
+password = "{{POSTGRES_PASSWORD}}"
+pool_size = 20
+
+[pools.opensql.shards.0]
+servers = [
+    ["127.0.0.1", 5432, "primary"],
+]
+database = "postgres"

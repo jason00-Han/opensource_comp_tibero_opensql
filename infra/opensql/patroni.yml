@@ -1,0 +1,66 @@
+scope: opensql
+name: postgresql1
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 127.0.0.1:8008
+
+etcd3:
+  hosts: 127.0.0.1:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    failsafe_mode: true
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_connections: 100
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 1GB
+        archive_mode: "on"
+        archive_command: /bin/true
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+    - allow-group-access
+
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 127.0.0.1:5432
+  data_dir: /home/opensql/data/pgsql
+  bin_dir: /home/opensql/bin
+  pgpass: /home/opensql/.pgpass
+  env:
+    OPENSQL_LICENSE_PATH: /home/opensql/license/license.xml
+  authentication:
+    superuser:
+      username: postgres
+      password: "{{POSTGRES_PASSWORD}}"
+    replication:
+      username: patroni_repl
+      password: "{{REPLICATION_PASSWORD}}"
+    rewind:
+      username: patroni_rewind
+      password: "{{REWIND_PASSWORD}}"
+  pg_hba:
+    - local all all trust
+    - host replication patroni_repl all scram-sha-256
+    - host all all all scram-sha-256
+  parameters:
+    log_line_prefix: '%m [%r] [%u] [%a]'
+    unix_socket_directories: /home/opensql/tmp
+    shared_preload_libraries: opensql_license,o2scheduler,pg_stat_statements
+    dynamic_shared_memory_type: mmap
+
+tags:
+  noloadbalance: false
+  clonefrom: false
+  nostream: false
