@@ -151,6 +151,51 @@ CREATE TABLE IF NOT EXISTS tibero_doc.document_acl (
     PRIMARY KEY (document_id, principal_type, principal_id)
 );
 
+-- Document knowledge graph: entities mentioned by chunks and their relationships.
+CREATE TABLE IF NOT EXISTS tibero_doc.entities (
+    entity_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id uuid NOT NULL REFERENCES tibero_doc.workspaces(workspace_id) ON DELETE CASCADE,
+    entity_type text NOT NULL CHECK (entity_type IN ('person', 'organization', 'system', 'policy', 'project', 'topic')),
+    name text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, entity_type, name)
+);
+
+CREATE TABLE IF NOT EXISTS tibero_doc.document_entities (
+    document_id text NOT NULL REFERENCES tibero_doc.documents(document_id) ON DELETE CASCADE,
+    entity_id uuid NOT NULL REFERENCES tibero_doc.entities(entity_id) ON DELETE CASCADE,
+    chunk_index integer NOT NULL,
+    confidence double precision NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+    mention text,
+    PRIMARY KEY (document_id, entity_id, chunk_index)
+);
+
+CREATE TABLE IF NOT EXISTS tibero_doc.relationships (
+    relationship_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id uuid NOT NULL REFERENCES tibero_doc.workspaces(workspace_id) ON DELETE CASCADE,
+    source_entity_id uuid NOT NULL REFERENCES tibero_doc.entities(entity_id) ON DELETE CASCADE,
+    target_entity_id uuid NOT NULL REFERENCES tibero_doc.entities(entity_id) ON DELETE CASCADE,
+    relationship_type text NOT NULL,
+    confidence double precision NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
+    document_id text REFERENCES tibero_doc.documents(document_id) ON DELETE CASCADE,
+    chunk_index integer,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, source_entity_id, target_entity_id, relationship_type, document_id, chunk_index),
+    CHECK (source_entity_id <> target_entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS entities_workspace_name_idx
+    ON tibero_doc.entities (workspace_id, lower(name));
+CREATE INDEX IF NOT EXISTS document_entities_entity_idx
+    ON tibero_doc.document_entities (entity_id, document_id);
+CREATE INDEX IF NOT EXISTS relationships_source_idx
+    ON tibero_doc.relationships (workspace_id, source_entity_id);
+CREATE INDEX IF NOT EXISTS relationships_target_idx
+    ON tibero_doc.relationships (workspace_id, target_entity_id);
+
 CREATE TABLE IF NOT EXISTS tibero_doc.document_versions (
     workspace_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     filename text NOT NULL,

@@ -4,7 +4,8 @@ from packages.core.embedding_service import embedding_provider_from_env
 from packages.core.pipeline import PipelineService, job_repository_from_env
 from packages.core.pipeline.service import JobRepository
 from services.api.store import DocumentStore, document_store_from_env
-from services.api.auth import AuthContext
+from services.api.auth import AuthContext, can_access_document
+from packages.core.knowledge_graph import KnowledgeGraphService
 
 
 class MCPDocumentService:
@@ -38,6 +39,8 @@ class MCPDocumentService:
         return {"documents": self.documents.list_documents(limit, offset)}
 
     def get_document(self, document_id: str) -> dict:
+        if self.context and not can_access_document(self.context, document_id):
+            raise ValueError(f"Document not found: {document_id}")
         document = self.documents.get_document(document_id)
         if document is None:
             raise ValueError(f"Document not found: {document_id}")
@@ -51,3 +54,12 @@ class MCPDocumentService:
 
     def stats(self) -> dict:
         return self.documents.stats()
+
+    def graph(self, document_id: str) -> dict:
+        if self.context and not can_access_document(self.context, document_id):
+            raise ValueError(f"Document not found: {document_id}")
+        document = self.documents.get_document(document_id)
+        if document is None:
+            raise ValueError(f"Document not found: {document_id}")
+        workspace_id = self.context.workspace_id if self.context else "00000000-0000-0000-0000-000000000001"
+        return {"document_id": document_id, **KnowledgeGraphService().document_graph(workspace_id, document_id)}

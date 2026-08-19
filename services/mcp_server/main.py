@@ -47,6 +47,12 @@ def get_document_stats() -> dict:
     return documents.stats()
 
 
+@server.tool()
+def get_document_graph(document_id: str) -> dict:
+    """Return entities and relationships extracted from one document."""
+    return documents.graph(document_id)
+
+
 def run_server() -> None:
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

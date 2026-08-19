@@ -29,6 +29,7 @@ from services.api.cache import document_cache
 from services.api.email_service import send_invitation
 from services.api.rate_limit import RateLimitMiddleware
 from packages.core.database import connect
+from packages.core.knowledge_graph import KnowledgeGraphService
 from psycopg.rows import dict_row
 
 
@@ -46,7 +47,7 @@ if web_dir.exists():
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=100)
-    mode: str = Field(default="hybrid", pattern="^(keyword|vector|hybrid)$")
+    mode: str = Field(default="hybrid", pattern="^(keyword|vector|graph|hybrid)$")
 
 
 class InvitationRequest(BaseModel):
@@ -125,6 +126,10 @@ def _embed_document(document_id: str, store: DocumentStore) -> dict:
     return get_embeddings().embed_document(document_id, chunks)
 
 
+def _index_graph(document_id: str, workspace_id: str, store: DocumentStore) -> dict:
+    return KnowledgeGraphService().index_document(workspace_id, document_id, store.chunks_for_document(document_id))
+
+
 @app.get("/")
 def root() -> dict:
     return {"name": "Tibero Doc API", "status": "running", "docs": "/docs"}
@@ -175,11 +180,12 @@ async def ingest_document(file: UploadFile = File(...), context: AuthContext = D
         if os.getenv("PIPELINE_MODE", "queue") == "inline":
             pipeline.running(job.job_id)
             record = store.index_upload(stored.filename, stored.object_key) if hasattr(store, "objects") else store.index_upload(stored.filename)
+            graph = _index_graph(record.document_id, context.workspace_id, store)
             embedding = _embed_document(record.document_id, store)
             job = pipeline.complete(job.job_id, {
                 "document_id": record.document_id, "filename": record.filename,
                 "version": record.version, "chunks": record.chunk_count,
-                **embedding,
+                **embedding, "graph": graph,
             })
     except PipelinePublishError as exc:
         raise HTTPException(status_code=503, detail="RabbitMQ 연결에 실패했습니다.") from exc
@@ -240,6 +246,28 @@ def document_versions(document_id: str, context: AuthContext = Depends(authentic
     return {"filename": document["filename"], "versions": store.versions(document["filename"])}
 
 
+@app.get("/v1/documents/{document_id}/graph")
+def document_graph(document_id: str, context: AuthContext = Depends(authenticate)) -> dict:
+    if not can_access_document(context, document_id):
+        raise HTTPException(status_code=403, detail="문서 접근 권한이 없습니다.")
+    graph = KnowledgeGraphService().document_graph(context.workspace_id, document_id)
+    return {"document_id": document_id, **graph}
+
+
+@app.post("/v1/graph/reindex")
+def reindex_knowledge_graph(context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    store = _store_for(context)
+    results = []
+    for document in store.list_documents(10000, 0):
+        results.append({
+            "document_id": document["document_id"],
+            **_index_graph(document["document_id"], context.workspace_id, store),
+        })
+    audit(context, "graph.reindex", "workspace", context.workspace_id, {"documents": len(results)})
+    return {"documents": len(results), "results": results}
+
+
 @app.get("/v1/documents/{document_id}/download")
 def download_document(document_id: str, context: AuthContext = Depends(authenticate)):
     store = _store_for(context)
@@ -269,6 +297,10 @@ def search_documents(request: SearchRequest, context: AuthContext = Depends(auth
     results = store.search(request.query, request.top_k, vector, model)
     if request.mode == "vector":
         results = [item for item in results if item.get("vector_rank") is not None]
+    elif request.mode == "graph":
+        results = [item for item in results if item.get("graph_rank") is not None]
+    elif request.mode == "keyword":
+        results = [item for item in results if item.get("keyword_rank") is not None]
     audit(context, "document.search", "search", details={"query_length": len(request.query), "results": len(results)})
     return {"query": request.query, "mode": request.mode, "results": results}
 
@@ -281,7 +313,7 @@ def ask_agent(request: AgentRequest, context: AuthContext = Depends(authenticate
     results = store.search(request.question, request.top_k, vector, provider.model)
     answer, answer_provider = answer_question(request.question, results)
     citations = [
-        {"index": index, "document_id": item["document_id"], "filename": item["filename"], "chunk_index": item["chunk_index"], "score": item.get("score")}
+        {"index": index, "document_id": item["document_id"], "filename": item["filename"], "chunk_index": item["chunk_index"], "score": item.get("score"), "entities": item.get("entities", []), "graph_rank": item.get("graph_rank")}
         for index, item in enumerate(results, 1)
     ]
     audit(context, "agent.ask", "search", details={"question_length": len(request.question), "results": len(results), "provider": answer_provider})
@@ -309,6 +341,7 @@ def sync_documents(context: AuthContext = Depends(authenticate)) -> dict:
             store = _store_for(context)
             result = store.sync()
             for document_id in result.get("document_ids", []):
+                _index_graph(document_id, context.workspace_id, store)
                 _embed_document(document_id, store)
             job = pipeline.complete(job.job_id, result)
     except PipelinePublishError as exc:

@@ -517,3 +517,18 @@ Failover 테스트는 실제 Primary를 중지하므로 명시적 확인 없이 
 
 코드를 수정한 뒤 실행 중인 Uvicorn이 구 코드를 유지할 수 있다. 개발 중에는
 `tibero-doc serve --reload`, 일반 실행에서는 `Ctrl+C` 후 `tibero-doc serve`로 재시작한다.
+
+## 18. 문서 Knowledge Graph
+
+[`packages/core/knowledge_graph.py`](../packages/core/knowledge_graph.py)가 청크에서 엔티티와 관계를
+추출하고 OpenSQL `entities`, `document_entities`, `relationships`에 저장한다.
+
+- `RuleBasedEntityExtractor`: 외부 API 없이 인물·조직·시스템·정책·프로젝트·주제 추출
+- `EntityMention`: 엔티티 종류, 이름, 청크, confidence, metadata
+- `EntityRelationship`: source/target, 관계 종류, 청크, confidence
+- `KnowledgeGraphService.index_document()`: 재색인 후 upsert 및 provenance 저장
+- `KnowledgeGraphService.document_graph()`: 문서 단위 엔티티·관계 반환
+- `query_terms()`: 질문에서 그래프 검색 용어 정규화
+
+`OpenSQLDocumentStore.search()`는 키워드, pgvector, 그래프 직접 매치와 1-hop 이웃을 각각
+순위화한 후 RRF로 결합한다. 그래프 SQL에도 workspace와 사용자/그룹 ACL 조건이 포함된다.

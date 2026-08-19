@@ -7,6 +7,7 @@ from packages.core.pipeline import JobPublisher, JobType, PipelineService, Rabbi
 from packages.core.pipeline.service import JobRepository
 from services.api.store import DocumentStore, document_store_from_env
 from workers.common import consume_jobs
+from packages.core.knowledge_graph import KnowledgeGraphService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,11 @@ class IngestJobProcessor:
                 "size": record.size,
                 "chunks": record.chunk_count,
             }
+            result["graph"] = KnowledgeGraphService().index_document(
+                job.payload.get("workspace_id") or "00000000-0000-0000-0000-000000000001",
+                record.document_id,
+                documents.chunks_for_document(record.document_id),
+            )
             if self.next_stage:
                 embedding_job = self.next_stage.start(JobType.EMBED_DOCUMENT, {
                     "document_id": record.document_id,

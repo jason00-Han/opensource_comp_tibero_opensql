@@ -50,3 +50,15 @@ def versions_command(document_id: str) -> None:
 def job_command(job_id: str) -> None:
     data = TiberoDocClient().job(job_id)
     console.print_json(json.dumps(data, ensure_ascii=False, default=str))
+
+
+def graph_command(document_id: str) -> None:
+    """문서에서 추출된 엔티티와 관계를 조회합니다."""
+    data = TiberoDocClient().document_graph(document_id)
+    console.print_json(json.dumps(data, ensure_ascii=False, default=str))
+
+
+def graph_reindex_command() -> None:
+    """현재 워크스페이스의 기존 문서를 지식 그래프로 다시 색인합니다."""
+    data = TiberoDocClient().reindex_graph()
+    console.print(f"[green]{data['documents']}개 문서의 지식 그래프 색인을 완료했습니다.[/green]")

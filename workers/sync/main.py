@@ -7,6 +7,7 @@ from packages.core.pipeline import JobPublisher, JobType, PipelineService, Rabbi
 from packages.core.pipeline.service import JobRepository
 from services.api.store import DocumentStore, document_store_from_env
 from workers.common import consume_jobs
+from packages.core.knowledge_graph import KnowledgeGraphService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +33,15 @@ class SyncJobProcessor:
         try:
             documents = self.documents or document_store_from_env(job.payload.get("workspace_id"), job.payload.get("user_id"))
             result = documents.sync()
+            if result.get("document_ids"):
+                result["graphs"] = [
+                    KnowledgeGraphService().index_document(
+                        job.payload.get("workspace_id") or "00000000-0000-0000-0000-000000000001",
+                        document_id,
+                        documents.chunks_for_document(document_id),
+                    )
+                    for document_id in result["document_ids"]
+                ]
             if self.next_stage:
                 result["embedding_job_ids"] = [
                     self.next_stage.start(JobType.EMBED_DOCUMENT, {"document_id": document_id, "source_job_id": job_id, "workspace_id": job.payload.get("workspace_id"), "user_id": job.payload.get("user_id")}).job_id

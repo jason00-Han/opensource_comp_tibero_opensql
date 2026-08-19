@@ -337,6 +337,27 @@ tibero-doc failover demo
 tibero-doc retention plan --hot-days 30 --cold-days 180 --delete-days 365
 ```
 
+## OpenSQL 문서 Knowledge Graph
+
+새 문서는 업로드·동기화 시 청크에서 인물, 조직, 시스템, 정책, 프로젝트와 주제를 자동
+추출한다. 같은 청크의 엔티티는 문맥에 따라 `uses`, `references`, `belongs_to`, `manages`,
+`supersedes`, `co_occurs_with` 관계로 연결되며, 모든 관계는 원본 document/chunk를 추적한다.
+
+```powershell
+# 기존 문서를 한 번에 그래프 색인
+tibero-doc graph-reindex
+
+# 한 문서의 엔티티와 관계 조회
+tibero-doc graph <DOCUMENT_ID>
+
+# 그래프 전용 검색과 키워드·벡터·그래프 3-way RRF
+tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
+tibero-doc search "OpenSQL 장애 정책" --mode hybrid
+```
+
+`hybrid` 결과에는 `keyword_rank`, `vector_rank`, `graph_rank`, `entities`가 포함된다. 그래프
+검색에도 기존 workspace와 문서 ACL 조건이 적용된다.
+
 `ask`는 기존 ACL이 허용하는 문서만 하이브리드 검색하고 답변과 인용 문서를 함께 반환한다.
 기본값은 API 키가 필요 없는 `local-extractive` 방식이다. 생성형 답변은 다음 중 하나로 켠다.
 

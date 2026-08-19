@@ -33,6 +33,10 @@ def test_workspace_isolation_invitation_and_roles(monkeypatch):
         )
         assert upload.status_code == 202
         document_id = upload.json()["document_id"]
+        graph_response = client.get(f"/v1/documents/{document_id}/graph", headers=headers1)
+        assert graph_response.status_code == 200
+        assert graph_response.json()["entities"]
+        assert client.post("/v1/graph/reindex", headers=headers1).status_code == 200
         assert client.get("/v1/documents", headers=headers1).json()["documents"]
         assert client.get("/v1/documents", headers=headers2).json()["documents"] == []
 

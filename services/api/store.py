@@ -19,6 +19,7 @@ from psycopg.types.json import Jsonb
 from pypdf import PdfReader
 
 from packages.core.database import connect, database_dsn, vector_literal
+from packages.core.knowledge_graph import query_terms
 from packages.core.object_storage import ObjectStorage, object_storage_from_env
 
 
@@ -396,6 +397,45 @@ class OpenSQLDocumentStore(DocumentStore):
                         (literal, self.workspace_id, self.user_id, self.user_id, self.user_id, model, len(query_vector), literal, candidate_limit),
                     )
                     vector_rows = cursor.fetchall()
+                graph_rows: list[dict] = []
+                terms = query_terms(query)
+                if terms:
+                    patterns = [f"%{term}%" for term in terms]
+                    cursor.execute(
+                        """
+                        WITH matched AS (
+                            SELECT entity_id FROM tibero_doc.entities
+                             WHERE workspace_id=%s AND name ILIKE ANY(%s)
+                        ), expanded AS (
+                            SELECT entity_id FROM matched
+                            UNION
+                            SELECT CASE WHEN r.source_entity_id=m.entity_id
+                                        THEN r.target_entity_id ELSE r.source_entity_id END
+                              FROM matched m JOIN tibero_doc.relationships r
+                                ON r.workspace_id=%s AND
+                                   (r.source_entity_id=m.entity_id OR r.target_entity_id=m.entity_id)
+                        )
+                        SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                               array_agg(DISTINCT e.name) AS entities,
+                               count(DISTINCT e.entity_id) AS entity_matches
+                          FROM expanded x
+                          JOIN tibero_doc.entities e ON e.entity_id=x.entity_id
+                          JOIN tibero_doc.document_entities de ON de.entity_id=x.entity_id
+                          JOIN tibero_doc.chunks c ON c.document_id=de.document_id AND c.chunk_index=de.chunk_index
+                          JOIN tibero_doc.documents d ON d.document_id=c.document_id
+                         WHERE d.workspace_id=%s
+                           AND (d.visibility='workspace' OR d.owner_user_id=%s OR EXISTS (
+                             SELECT 1 FROM tibero_doc.document_acl a WHERE a.document_id=d.document_id
+                               AND ((a.principal_type='user' AND a.principal_id=%s)
+                                 OR (a.principal_type='group' AND a.principal_id IN
+                                     (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
+                         GROUP BY c.document_id, d.filename, c.chunk_index, c.content
+                         ORDER BY entity_matches DESC, c.document_id, c.chunk_index LIMIT %s
+                        """,
+                        (self.workspace_id, patterns, self.workspace_id, self.workspace_id,
+                         self.user_id, self.user_id, self.user_id, candidate_limit),
+                    )
+                    graph_rows = cursor.fetchall()
         combined: dict[tuple[str, int], dict] = {}
         for rank, row in enumerate(keyword_rows, start=1):
             key = (row["document_id"], row["chunk_index"])
@@ -403,6 +443,7 @@ class OpenSQLDocumentStore(DocumentStore):
                 "document_id": row["document_id"], "filename": row["filename"],
                 "chunk_index": row["chunk_index"], "content": row["content"],
                 "keyword_rank": rank, "vector_rank": None, "_rrf": 1 / (60 + rank),
+                "graph_rank": None, "entities": [],
             }
         for rank, row in enumerate(vector_rows, start=1):
             key = (row["document_id"], row["chunk_index"])
@@ -410,8 +451,20 @@ class OpenSQLDocumentStore(DocumentStore):
                 "document_id": row["document_id"], "filename": row["filename"],
                 "chunk_index": row["chunk_index"], "content": row["content"],
                 "keyword_rank": None, "vector_rank": None, "_rrf": 0.0,
+                "graph_rank": None, "entities": [],
             })
             item["vector_rank"] = rank
+            item["_rrf"] += 1 / (60 + rank)
+        for rank, row in enumerate(graph_rows, start=1):
+            key = (row["document_id"], row["chunk_index"])
+            item = combined.setdefault(key, {
+                "document_id": row["document_id"], "filename": row["filename"],
+                "chunk_index": row["chunk_index"], "content": row["content"],
+                "keyword_rank": None, "vector_rank": None, "graph_rank": None,
+                "entities": [], "_rrf": 0.0,
+            })
+            item["graph_rank"] = rank
+            item["entities"] = list(row["entities"] or [])
             item["_rrf"] += 1 / (60 + rank)
         results = sorted(combined.values(), key=lambda item: item["_rrf"], reverse=True)[:top_k]
         for item in results:

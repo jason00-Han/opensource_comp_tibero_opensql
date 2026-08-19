@@ -47,12 +47,14 @@ class TiberoDocClient:
         self,
         query: str,
         top_k: int = 5,
+        mode: str = "hybrid",
     ):
         response = self.client.post(
             "/v1/search",
             json={
                 "query": query,
                 "top_k": top_k,
+                "mode": mode,
             },
         )
 
@@ -94,6 +96,16 @@ class TiberoDocClient:
 
     def document(self, document_id: str):
         response = self.client.get(f"/v1/documents/{document_id}")
+        response.raise_for_status()
+        return response.json()
+
+    def document_graph(self, document_id: str):
+        response = self.client.get(f"/v1/documents/{document_id}/graph")
+        response.raise_for_status()
+        return response.json()
+
+    def reindex_graph(self):
+        response = self.client.post("/v1/graph/reindex")
         response.raise_for_status()
         return response.json()
 

@@ -20,6 +20,7 @@ def search_command(
         "-k",
         help="검색 결과 개수",
     ),
+    mode: str = typer.Option("hybrid", "--mode", "-m", help="keyword/vector/graph/hybrid"),
 ):
 
     client = TiberoDocClient()
@@ -29,6 +30,7 @@ def search_command(
         response = client.search(
             query=query,
             top_k=top_k,
+            mode=mode,
         )
 
     except httpx.ConnectError:
@@ -83,6 +85,15 @@ def search_command(
         console.print(
             f"Score: {score:.4f}"
         )
+
+        ranks = [
+            f"keyword={result.get('keyword_rank')}" if result.get("keyword_rank") else None,
+            f"vector={result.get('vector_rank')}" if result.get("vector_rank") else None,
+            f"graph={result.get('graph_rank')}" if result.get("graph_rank") else None,
+        ]
+        console.print("Ranks: " + ", ".join(rank for rank in ranks if rank))
+        if result.get("entities"):
+            console.print("Entities: " + ", ".join(result["entities"]))
 
         console.print(content)
 
