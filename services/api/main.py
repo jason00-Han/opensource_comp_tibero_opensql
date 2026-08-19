@@ -23,7 +23,9 @@ from packages.core.pipeline import (
     job_repository_from_env,
 )
 from services.api.store import DocumentStore, document_store_from_env
-from services.api.auth import AuthContext, accept_invitation, audit, authenticate, can_access_document, create_invitation, login, refresh_access_token, require_role
+from services.api.auth import AuthContext, accept_invitation, audit, authenticate, can_access_document, create_invitation, issue_token, login, refresh_access_token, require_role
+from services.api.agent import answer_question
+from services.api.cache import document_cache
 from services.api.email_service import send_invitation
 from services.api.rate_limit import RateLimitMiddleware
 from packages.core.database import connect
@@ -80,6 +82,15 @@ class ACLRequest(BaseModel):
     principal_type: str = Field(pattern="^(user|group)$")
     principal_id: str
     permission: str = Field(default="read", pattern="^(read|write|manage)$")
+
+
+class AgentRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class RoleRequest(BaseModel):
+    role: str = Field(pattern="^(viewer|editor|manager|owner)$")
 
 
 def get_store() -> DocumentStore:
@@ -193,13 +204,20 @@ def list_documents(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0
 @app.get("/v1/documents/{document_id}")
 def get_document(document_id: str, context: AuthContext = Depends(authenticate)) -> dict:
     store = _store_for(context)
+    # 캐시는 성능 계층일 뿐 권한 계층이 아니다. 매 요청마다 OpenSQL ACL을 먼저 확인한다.
+    if not can_access_document(context, document_id):
+        raise HTTPException(status_code=403, detail="문서 접근 권한이 없습니다.")
+    cached = document_cache.get(context.workspace_id, document_id)
+    if cached is not None:
+        audit(context, "document.read.cached", "document", document_id)
+        return {**cached, "cache": "hit"}
     document = store.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
-    if not can_access_document(context, document_id):
-        raise HTTPException(status_code=403, detail="문서 접근 권한이 없습니다.")
-    audit(context, "document.read", "document", document_id)
-    return {**document, "chunks": store.chunks_for_document(document_id)}
+    result = {**document, "chunks": store.chunks_for_document(document_id)}
+    popularity = document_cache.record_and_cache(context.workspace_id, document_id, result)
+    audit(context, "document.read", "document", document_id, {"popularity": popularity})
+    return {**result, "cache": "miss", "popularity": popularity}
 
 
 @app.delete("/v1/documents/{document_id}", status_code=204)
@@ -207,6 +225,7 @@ def delete_document(document_id: str, context: AuthContext = Depends(authenticat
     require_role(context, "manager")
     if not _store_for(context).delete_document(document_id):
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    document_cache.invalidate(context.workspace_id, document_id)
     audit(context, "document.delete", "document", document_id)
 
 
@@ -254,6 +273,21 @@ def search_documents(request: SearchRequest, context: AuthContext = Depends(auth
     return {"query": request.query, "mode": request.mode, "results": results}
 
 
+@app.post("/v1/agent/ask")
+def ask_agent(request: AgentRequest, context: AuthContext = Depends(authenticate)) -> dict:
+    store = _store_for(context)
+    provider = embedding_provider_from_env()
+    vector = provider.embed([request.question])[0]
+    results = store.search(request.question, request.top_k, vector, provider.model)
+    answer, answer_provider = answer_question(request.question, results)
+    citations = [
+        {"index": index, "document_id": item["document_id"], "filename": item["filename"], "chunk_index": item["chunk_index"], "score": item.get("score")}
+        for index, item in enumerate(results, 1)
+    ]
+    audit(context, "agent.ask", "search", details={"question_length": len(request.question), "results": len(results), "provider": answer_provider})
+    return {"question": request.question, "answer": answer, "provider": answer_provider, "citations": citations}
+
+
 @app.get("/v1/jobs/{job_id}")
 def get_job(job_id: str, context: AuthContext = Depends(authenticate)) -> dict:
     job = PipelineService(get_job_repository()).get(job_id)
@@ -285,6 +319,12 @@ def sync_documents(context: AuthContext = Depends(authenticate)) -> dict:
 @app.get("/v1/me")
 def current_user(context: AuthContext = Depends(authenticate)) -> dict:
     return context.__dict__
+
+
+@app.get("/v1/stats")
+def workspace_stats(context: AuthContext = Depends(authenticate)) -> dict:
+    """현재 인증 사용자가 볼 수 있는 워크스페이스의 문서 통계를 반환한다."""
+    return _store_for(context).stats()
 
 
 @app.post("/v1/invitations")
@@ -333,6 +373,18 @@ def create_group(request: GroupRequest, context: AuthContext = Depends(authentic
     return {"group_id": str(row[0]), "name": request.name}
 
 
+@app.get("/v1/groups")
+def list_groups(context: AuthContext = Depends(authenticate)) -> dict:
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT g.group_id, g.name, count(gm.user_id) FROM tibero_doc.groups g
+                 LEFT JOIN tibero_doc.group_members gm USING(group_id)
+                WHERE g.workspace_id=%s GROUP BY g.group_id, g.name ORDER BY g.name""",
+            (context.workspace_id,),
+        ).fetchall()
+    return {"groups": [{"group_id": str(row[0]), "name": row[1], "member_count": row[2]} for row in rows]}
+
+
 @app.post("/v1/groups/{group_id}/members")
 def add_group_member(group_id: str, request: GroupMemberRequest, context: AuthContext = Depends(authenticate)) -> dict:
     require_role(context, "manager")
@@ -346,6 +398,20 @@ def add_group_member(group_id: str, request: GroupMemberRequest, context: AuthCo
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
     return {"status": "added"}
+
+
+@app.delete("/v1/groups/{group_id}/members/{user_id}", status_code=204)
+def remove_group_member(group_id: str, user_id: str, context: AuthContext = Depends(authenticate)) -> None:
+    require_role(context, "manager")
+    with connect() as connection:
+        cursor = connection.execute(
+            """DELETE FROM tibero_doc.group_members gm USING tibero_doc.groups g
+                WHERE gm.group_id=g.group_id AND gm.group_id=%s AND gm.user_id=%s AND g.workspace_id=%s""",
+            (group_id, user_id, context.workspace_id),
+        )
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="그룹 멤버를 찾을 수 없습니다.")
+    audit(context, "group.member.remove", "group", group_id, {"user_id": user_id})
 
 
 @app.post("/v1/documents/{document_id}/acl")
@@ -362,8 +428,135 @@ def grant_document_acl(document_id: str, request: ACLRequest, context: AuthConte
             raise HTTPException(status_code=400, detail="같은 워크스페이스의 사용자 또는 그룹만 권한을 받을 수 있습니다.")
         connection.execute("INSERT INTO tibero_doc.document_acl (document_id, principal_type, principal_id, permission, granted_by) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (document_id, principal_type, principal_id) DO UPDATE SET permission=EXCLUDED.permission, granted_by=EXCLUDED.granted_by", (document_id, request.principal_type, request.principal_id, request.permission, context.user_id))
         connection.execute("UPDATE tibero_doc.documents SET visibility='restricted' WHERE document_id=%s", (document_id,))
+    document_cache.invalidate(context.workspace_id, document_id)
     audit(context, "document.acl.grant", "document", document_id, request.model_dump())
     return {"status": "granted"}
+
+
+@app.get("/v1/documents/{document_id}/acl")
+def list_document_acl(document_id: str, context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    if not _store_for(context).get_document(document_id):
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT principal_type, principal_id, permission, granted_by, created_at FROM tibero_doc.document_acl WHERE document_id=%s ORDER BY created_at",
+            (document_id,),
+        ).fetchall()
+    return {"acl": [{"principal_type": r[0], "principal_id": str(r[1]), "permission": r[2], "granted_by": str(r[3]), "created_at": r[4]} for r in rows]}
+
+
+@app.delete("/v1/documents/{document_id}/acl/{principal_type}/{principal_id}", status_code=204)
+def revoke_document_acl(document_id: str, principal_type: str, principal_id: str, context: AuthContext = Depends(authenticate)) -> None:
+    require_role(context, "manager")
+    with connect() as connection:
+        cursor = connection.execute(
+            "DELETE FROM tibero_doc.document_acl WHERE document_id=%s AND principal_type=%s AND principal_id=%s",
+            (document_id, principal_type, principal_id),
+        )
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="ACL 항목을 찾을 수 없습니다.")
+    document_cache.invalidate(context.workspace_id, document_id)
+    audit(context, "document.acl.revoke", "document", document_id, {"principal_type": principal_type, "principal_id": principal_id})
+
+
+@app.get("/v1/workspaces")
+def list_workspaces(context: AuthContext = Depends(authenticate)) -> dict:
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT w.workspace_id, w.name, w.slug, o.name, m.role
+                 FROM tibero_doc.workspace_members m JOIN tibero_doc.workspaces w USING(workspace_id)
+                 JOIN tibero_doc.organizations o USING(organization_id)
+                WHERE m.user_id=%s ORDER BY o.name, w.name""",
+            (context.user_id,),
+        ).fetchall()
+    return {"workspaces": [{"workspace_id": str(r[0]), "name": r[1], "slug": r[2], "organization": r[3], "role": r[4], "current": str(r[0]) == context.workspace_id} for r in rows]}
+
+
+@app.post("/v1/workspaces/{workspace_id}/switch")
+def switch_workspace(workspace_id: str, context: AuthContext = Depends(authenticate)) -> dict:
+    with connect() as connection:
+        member = connection.execute("SELECT 1 FROM tibero_doc.workspace_members WHERE workspace_id=%s AND user_id=%s", (workspace_id, context.user_id)).fetchone()
+    if not member:
+        raise HTTPException(status_code=404, detail="가입된 워크스페이스를 찾을 수 없습니다.")
+    return {"access_token": issue_token(context.user_id, workspace_id, "workspace-switch"), "workspace_id": workspace_id}
+
+
+@app.get("/v1/users")
+def list_users(context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT u.user_id, u.email, u.display_name, u.status, m.role, m.joined_at
+                 FROM tibero_doc.workspace_members m JOIN tibero_doc.users u USING(user_id)
+                WHERE m.workspace_id=%s ORDER BY u.email""",
+            (context.workspace_id,),
+        ).fetchall()
+    return {"users": [{"user_id": str(r[0]), "email": r[1], "display_name": r[2], "status": r[3], "role": r[4], "joined_at": r[5]} for r in rows]}
+
+
+@app.patch("/v1/users/{user_id}/role")
+def change_user_role(user_id: str, request: RoleRequest, context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "owner")
+    with connect() as connection:
+        cursor = connection.execute("UPDATE tibero_doc.workspace_members SET role=%s WHERE workspace_id=%s AND user_id=%s", (request.role, context.workspace_id, user_id))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    audit(context, "user.role.change", "user", user_id, {"role": request.role})
+    return {"status": "updated", "role": request.role}
+
+
+@app.post("/v1/users/{user_id}/disable")
+def disable_user(user_id: str, context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "owner")
+    if user_id == context.user_id:
+        raise HTTPException(status_code=400, detail="자기 계정은 비활성화할 수 없습니다.")
+    with connect() as connection:
+        cursor = connection.execute("UPDATE tibero_doc.users SET status='disabled' WHERE user_id=%s", (user_id,))
+        connection.execute("UPDATE tibero_doc.api_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (user_id,))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    audit(context, "user.disable", "user", user_id)
+    return {"status": "disabled"}
+
+
+@app.get("/v1/admin/storage-status")
+def storage_status(context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    return {"object_storage": os.getenv("OBJECT_STORAGE", "local"), "redis_cache": document_cache.status(), "stats": _store_for(context).stats()}
+
+
+@app.get("/v1/admin/retention-plan")
+def retention_plan(
+    hot_days: int = Query(30, ge=1), cold_days: int = Query(180, ge=2),
+    delete_days: int = Query(365, ge=3), context: AuthContext = Depends(authenticate),
+) -> dict:
+    """파괴 작업 없이 문서 수명주기 후보만 분류한다."""
+    require_role(context, "manager")
+    if not hot_days < cold_days < delete_days:
+        raise HTTPException(status_code=400, detail="hot_days < cold_days < delete_days 순서여야 합니다.")
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT document_id, filename, updated_at, metadata,
+                      extract(day from now() - updated_at)::int AS age_days
+                 FROM tibero_doc.documents WHERE workspace_id=%s ORDER BY updated_at""",
+            (context.workspace_id,),
+        ).fetchall()
+    buckets = {"hot": [], "warm": [], "cold": [], "delete_candidate": [], "legal_hold": []}
+    for document_id, filename, updated_at, metadata, age_days in rows:
+        item = {"document_id": document_id, "filename": filename, "updated_at": updated_at, "age_days": age_days}
+        if (metadata or {}).get("legal_hold"):
+            bucket = "legal_hold"
+        elif age_days <= hot_days:
+            bucket = "hot"
+        elif age_days <= cold_days:
+            bucket = "warm"
+        elif age_days <= delete_days:
+            bucket = "cold"
+        else:
+            bucket = "delete_candidate"
+        buckets[bucket].append(item)
+    return {"policy": {"hot_days": hot_days, "cold_days": cold_days, "delete_days": delete_days, "automatic_delete": False}, "buckets": buckets}
 
 
 @app.get("/v1/admin/audit-logs")

@@ -56,8 +56,19 @@ def test_workspace_isolation_invitation_and_roles(monkeypatch):
         viewer_id = client.get("/v1/me", headers=viewer_headers).json()["user_id"]
         group = client.post("/v1/groups", headers=headers1, json={"name": "Readers"})
         assert group.status_code == 200
+        assert any(item["group_id"] == group.json()["group_id"] for item in client.get("/v1/groups", headers=headers1).json()["groups"])
+        workspace_rows = client.get("/v1/workspaces", headers=headers1).json()["workspaces"]
+        assert len(workspace_rows) == 1
+        switched = client.post(f"/v1/workspaces/{workspace1}/switch", headers=headers1)
+        assert switched.status_code == 200
+        assert client.get("/v1/me", headers={"Authorization": f"Bearer {switched.json()['access_token']}"}).status_code == 200
+        assert any(item["email"] == owner1_email for item in client.get("/v1/users", headers=headers1).json()["users"])
+        retention = client.get("/v1/admin/retention-plan", headers=headers1)
+        assert retention.status_code == 200
+        assert retention.json()["policy"]["automatic_delete"] is False
         assert client.post(f"/v1/groups/{group.json()['group_id']}/members", headers=headers1, json={"user_id": viewer_id}).status_code == 200
         assert client.post(f"/v1/documents/{document_id}/acl", headers=headers1, json={"principal_type": "group", "principal_id": group.json()["group_id"], "permission": "read"}).status_code == 200
+        assert client.get(f"/v1/documents/{document_id}/acl", headers=headers1).json()["acl"][0]["principal_id"] == group.json()["group_id"]
         assert client.get("/v1/documents", headers=viewer_headers).json()["documents"]
         denied = client.post(
             "/v1/documents", headers=viewer_headers,
@@ -70,6 +81,17 @@ def test_workspace_isolation_invitation_and_roles(monkeypatch):
         assert audit_response.status_code == 200
         actions = {entry["action"] for entry in audit_response.json()["logs"]}
         assert {"member.invite", "group.create", "document.acl.grant"} <= actions
+        assert client.delete(f"/v1/documents/{document_id}/acl/group/{group.json()['group_id']}", headers=headers1).status_code == 204
+        assert client.delete(f"/v1/groups/{group.json()['group_id']}/members/{viewer_id}", headers=headers1).status_code == 204
+        assert client.get("/v1/documents", headers=viewer_headers).json()["documents"] == []
+        role_changed = client.patch(f"/v1/users/{viewer_id}/role", headers=headers1, json={"role": "editor"})
+        assert role_changed.status_code == 200
+        assert client.get("/v1/me", headers=viewer_headers).json()["role"] == "editor"
+        agent = client.post("/v1/agent/ask", headers=headers1, json={"question": "confidential document를 찾아줘", "top_k": 3})
+        assert agent.status_code == 200
+        assert agent.json()["citations"]
+        assert client.post(f"/v1/users/{viewer_id}/disable", headers=headers1).status_code == 200
+        assert client.get("/v1/me", headers=viewer_headers).status_code == 401
     finally:
         if document_id:
             OpenSQLDocumentStore(workspace_id=workspace1).delete_document(document_id)

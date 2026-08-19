@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
   rabbitmq:
     image: rabbitmq:4-management
     ports:
@@ -8,4 +15,5 @@ services:
       - rabbitmq-data:/var/lib/rabbitmq
 
 volumes:
+  redis-data:
   rabbitmq-data:

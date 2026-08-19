@@ -307,3 +307,53 @@ docker compose -f infra\docker-compose.ha.yml up -d --build
 ```
 
 구성은 etcd 3개, Patroni/OpenSQL 3개와 Patroni `/primary` 상태를 검사하는 DB Router로 이루어집니다. 시연 스크립트는 현재 Leader를 찾아 중지하고 45초 내 새 Leader 선출 여부를 검증합니다.
+
+## 관리·에이전트 CLI
+
+```powershell
+tibero-doc group create Readers
+tibero-doc group list
+tibero-doc group add-member <GROUP_ID> <USER_ID>
+tibero-doc group remove-member <GROUP_ID> <USER_ID>
+
+tibero-doc acl grant <DOCUMENT_ID> <PRINCIPAL_ID> --type group --permission read
+tibero-doc acl list <DOCUMENT_ID>
+tibero-doc acl revoke <DOCUMENT_ID> <PRINCIPAL_ID> --type group
+
+tibero-doc workspace list
+tibero-doc workspace use <WORKSPACE_ID>
+tibero-doc user list
+tibero-doc user change-role <USER_ID> editor
+tibero-doc user disable <USER_ID>
+
+tibero-doc ask "고가용성과 관련된 문서를 찾아서 설명해줘"
+tibero-doc download <DOCUMENT_ID> --output report.pdf
+tibero-doc mcp serve --transport streamable-http --port 8001
+tibero-doc mcp status
+tibero-doc worker status
+tibero-doc storage status
+tibero-doc deploy check
+tibero-doc failover demo
+tibero-doc retention plan --hot-days 30 --cold-days 180 --delete-days 365
+```
+
+`ask`는 기존 ACL이 허용하는 문서만 하이브리드 검색하고 답변과 인용 문서를 함께 반환한다.
+기본값은 API 키가 필요 없는 `local-extractive` 방식이다. 생성형 답변은 다음 중 하나로 켠다.
+
+```powershell
+# Ollama
+$env:AGENT_PROVIDER="ollama"
+$env:AGENT_MODEL="qwen2.5:7b"
+
+# OpenAI-compatible API
+$env:AGENT_PROVIDER="openai"
+$env:OPENAI_API_KEY="..."
+$env:AGENT_MODEL="gpt-4.1-mini"
+```
+
+로컬 Redis는 `docker compose up -d redis`로 실행한다. 문서는 기본 3회 조회 후 300초 동안
+캐시되며 `DOCUMENT_CACHE_THRESHOLD`, `DOCUMENT_CACHE_TTL_SECONDS`로 조정한다. 모든 캐시
+조회는 OpenSQL ACL 검사를 먼저 수행하고 ACL 변경·문서 삭제 시 즉시 무효화한다.
+
+오래된 비정형 데이터의 Hot/Warm/Cold/삭제 승인 정책은
+[`docs/unstructured-data-lifecycle.md`](docs/unstructured-data-lifecycle.md)에 정리되어 있다.

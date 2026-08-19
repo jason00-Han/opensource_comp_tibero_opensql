@@ -9,6 +9,11 @@ from tibero_doc.commands.search import search_command
 from tibero_doc.commands.settings import settings_app
 from tibero_doc.commands.status import status_command
 from tibero_doc.commands.sync import sync_command
+from tibero_doc.commands.agent import ask_command
+from tibero_doc.commands.administration import (
+    acl_app, deploy_app, download_command, failover_app, group_app, mcp_app,
+    retention_app, storage_app, user_app, worker_app, workspace_app,
+)
 
 
 app = typer.Typer(
@@ -36,7 +41,19 @@ app.command("show")(show_command)
 app.command("delete")(delete_command)
 app.command("versions")(versions_command)
 app.command("job")(job_command)
+app.command("ask")(ask_command)
+app.command("download")(download_command)
 app.add_typer(settings_app, name="config")
+app.add_typer(group_app, name="group")
+app.add_typer(acl_app, name="acl")
+app.add_typer(workspace_app, name="workspace")
+app.add_typer(user_app, name="user")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(worker_app, name="worker")
+app.add_typer(storage_app, name="storage")
+app.add_typer(deploy_app, name="deploy")
+app.add_typer(failover_app, name="failover")
+app.add_typer(retention_app, name="retention")
 
 
 @app.callback()

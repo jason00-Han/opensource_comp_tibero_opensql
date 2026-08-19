@@ -41,10 +41,15 @@ def status_command() -> None:
         # Windows의 기본 CP949 콘솔에서도 깨지지 않는 표기를 사용한다.
         table.add_row(name, "[green]정상[/green]" if healthy else f"[yellow]{status}[/yellow]")
     console.print(table)
+    try:
+        # /health는 서비스 생존 상태이고, 문서 수는 로그인 워크스페이스 기준으로 표시한다.
+        workspace_stats = TiberoDocClient().stats()
+    except httpx.HTTPError:
+        workspace_stats = data
     database = data.get("database", {})
     console.print(
         f"[dim]DB {database.get('database', '-')} · "
         f"{'Replica' if database.get('is_replica') else 'Primary'} · "
-        f"documents {data.get('documents', 0)} · chunks {data.get('chunks', 0)} · "
-        f"embeddings {data.get('embeddings', 0)}[/dim]"
+        f"documents {workspace_stats.get('documents', 0)} · chunks {workspace_stats.get('chunks', 0)} · "
+        f"embeddings {workspace_stats.get('embeddings', 0)}[/dim]"
     )
