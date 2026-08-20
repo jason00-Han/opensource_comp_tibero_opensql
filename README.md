@@ -1,70 +1,296 @@
-# Tibero Doc — OpenSQL AI 문서 플랫폼
+# Tibero Doc
 
-문서를 업로드하면 내용을 추출·청킹·임베딩하고 OpenSQL에 저장한 뒤, 키워드와 벡터를 결합해 검색하는 CLI 중심 오픈소스 프로젝트입니다. OpenProxy를 단일 DB 진입점으로 사용하고 Patroni/etcd가 Primary 상태를 관리합니다.
+Tibero Doc은 팀 문서를 안전하게 모으고, 필요한 내용을 검색하거나 질문할 수 있는 OpenSQL 기반 문서 관리 서비스입니다.
 
-## 구현 기능
+사용자는 데이터베이스 주소를 알 필요 없이 CLI 또는 웹 브라우저로 문서를 업로드하고 검색할 수 있습니다. 관리자는 사용자, 그룹, 문서 권한과 감사 기록을 관리할 수 있습니다.
 
-- PDF, DOCX, TXT, HTML 업로드와 본문 추출
-- 중첩 청크 생성 및 메타데이터 저장
-- 동일 파일명 변경 시 버전 증가와 이력 보존
-- API 키가 필요 없는 384차원 로컬 임베딩
-- Ollama/OpenAI-compatible 임베딩 교체 지원
-- PostgreSQL FTS + pgvector RRF 하이브리드 검색
-- 업로드 디렉터리 변경 감지 및 증분 동기화
-- OpenSQL 기반 작업 상태 저장과 변경 이벤트(outbox)
-- 문서 목록·본문·버전 조회 및 삭제
-- REST API, CLI, MCP(stdio/Streamable HTTP)
-- 즉시 처리(`inline`)와 RabbitMQ 워커(`queue`) 실행 방식
-- 사용자·조직·워크스페이스 기반 다중 사용자 격리
-- Bearer API 토큰과 Viewer/Editor/Manager/Owner 역할 권한
-- 일회용 초대 토큰 가입과 감사 로그
+## 사용자가 할 수 있는 일
 
-## 3분 빠른 시작
+- PDF, DOCX, TXT, HTML 문서 업로드
+- 제목·본문을 이용한 문서 검색
+- 의미가 비슷한 문서와 관련 엔티티 검색
+- 자연어로 질문하고 근거 문서와 함께 답변받기
+- 문서 목록, 본문, 버전 이력 조회
+- 권한이 있는 원본 문서 다운로드
+- 변경된 문서 자동 동기화
+- 개인 또는 그룹별 문서 공유
+- 여러 워크스페이스 전환
+- 웹 UI, CLI, MCP 클라이언트 사용
 
-설치 후 환경 변수를 직접 만들 필요가 없습니다.
+## 빠른 시작
+
+### 1. 설치
+
+Windows PowerShell:
 
 ```powershell
-cd C:\Users\한경민\Desktop\opensource_comp_tibero_opensql
+cd C:\path\to\tibero-doc
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e services\api -e cli
+```
 
+WSL/Linux:
+
+```bash
+sudo apt install -y python3-venv
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e services/api -e cli
+```
+
+### 2. 최초 관리자 설정
+
+서버 관리자가 한 번만 실행합니다.
+
+```powershell
 tibero-doc setup
-tibero-doc serve
 ```
 
-`setup` 마법사는 OpenProxy 주소와 DB 계정을 질문하고 실제 연결까지 검사합니다. 비밀번호는 `config.toml`에 기록하지 않으며, 동의한 경우 Windows 자격 증명 관리자 등 운영체제 보안 저장소에 보관합니다. 비밀번호의 `@`, `#`, `%`, `^` 같은 문자도 자동으로 URL 인코딩합니다.
+마법사가 API 주소, OpenProxy 접속 정보, 문서 저장 위치, 임베딩 방식과 최초 관리자 계정을 설정하고 연결 상태를 검사합니다. 비밀번호는 설정 파일에 평문으로 저장하지 않습니다.
 
-마법사는 최초 관리자, 조직, 기본 워크스페이스도 만들고 사용자 접근 토큰을 운영체제 자격 증명 저장소에 보관합니다. 일반 사용자는 DB 정보를 입력하지 않고 관리자가 전달한 초대 토큰으로 가입합니다.
-
-서버를 켜둔 상태에서 새 터미널을 열어 사용합니다.
-
-```powershell
-tibero-doc status
-tibero-doc ingest .\documents
-tibero-doc search "장애 복구 절차"
-tibero-doc list
-```
-
-다른 사용자 초대:
-
-```powershell
-# Manager 또는 Owner
-tibero-doc invite user@example.com --role editor
-
-# 초대받은 사용자: DB 주소나 비밀번호 불필요
-tibero-doc join INVITE_TOKEN --email user@example.com --name "홍길동" --server http://docs-server:8000
-tibero-doc whoami
-```
-
-일반 사용자는 HTTPS API에만 접근합니다. OpenProxy와 OpenSQL 접속 정보는 서버 관리자만 보유하며, 문서 목록·조회·검색·삭제는 현재 토큰의 `workspace_id` 조건으로 격리됩니다.
-
-문제가 생기면 다음 명령이 설정, OpenProxy 포트, DB 로그인, API를 한 번에 검사하고 해결 명령을 안내합니다.
+설정에 문제가 있다면 다음 명령으로 원인과 해결 방법을 확인합니다.
 
 ```powershell
 tibero-doc doctor
 ```
 
-설정 관리:
+### 3. 서버 실행
+
+```powershell
+tibero-doc serve
+```
+
+기본 접속 주소:
+
+- 웹 UI: <http://localhost:8000/ui/>
+- API 문서: <http://localhost:8000/docs>
+- 상태 확인: `tibero-doc status`
+
+서버는 실행한 터미널을 종료할 때까지 동작합니다. CLI를 사용할 때는 새 터미널을 열어 가상환경을 활성화합니다.
+
+## 로그인과 초대
+
+### 기존 사용자 로그인
+
+```powershell
+tibero-doc login --email user@example.com
+tibero-doc whoami
+```
+
+### 새 사용자 초대
+
+Manager 또는 Owner가 초대를 생성합니다.
+
+```powershell
+tibero-doc invite user@example.com --role editor
+```
+
+초대받은 사용자는 전달받은 토큰과 서버 주소만 입력합니다. OpenSQL 주소와 DB 비밀번호는 필요하지 않습니다.
+
+```powershell
+tibero-doc join INVITE_TOKEN `
+  --email user@example.com `
+  --name "홍길동" `
+  --server http://docs-server:8000
+```
+
+Access Token을 갱신하려면 다음 명령을 사용합니다.
+
+```powershell
+tibero-doc refresh
+```
+
+## 문서 사용법
+
+### 문서 업로드
+
+파일 하나 또는 디렉터리를 업로드할 수 있습니다.
+
+```powershell
+tibero-doc ingest .\documents\policy.pdf
+tibero-doc ingest .\documents
+```
+
+업로드 결과로 표시되는 `JOB_ID`는 처리 상태를 확인할 때 사용합니다.
+
+```powershell
+tibero-doc job <JOB_ID>
+```
+
+### 문서 목록과 본문 조회
+
+```powershell
+tibero-doc list
+tibero-doc show <DOCUMENT_ID>
+tibero-doc versions <DOCUMENT_ID>
+```
+
+### 문서 검색
+
+별도 옵션 없이 검색하면 키워드, 의미 유사도, 문서 관계를 함께 사용합니다.
+
+```powershell
+tibero-doc search "장애 복구 절차"
+tibero-doc search "OpenSQL 고가용성" --top-k 10
+```
+
+필요하면 검색 방식을 선택할 수 있습니다.
+
+```powershell
+tibero-doc search "접근 통제 정책" --mode keyword
+tibero-doc search "비슷한 보안 규정" --mode vector
+tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
+tibero-doc search "OpenSQL 장애 정책" --mode hybrid
+```
+
+- `keyword`: 질문에 포함된 단어가 등장하는 문서 검색
+- `vector`: 표현이 달라도 의미가 비슷한 문서 검색
+- `graph`: 인물·조직·시스템·정책·프로젝트와 그 관계 검색
+- `hybrid`: 세 검색 결과를 함께 사용하며 기본값
+
+### 문서에 질문하기
+
+```powershell
+tibero-doc ask "고가용성과 관련된 문서를 찾아서 핵심 내용을 설명해줘"
+```
+
+답변에는 참고한 문서와 근거 청크가 함께 표시됩니다. 기본 설정은 외부 API 키가 필요 없는 로컬 답변 방식입니다.
+
+### 원본 다운로드와 삭제
+
+```powershell
+tibero-doc download <DOCUMENT_ID> --output report.pdf
+tibero-doc delete <DOCUMENT_ID>
+```
+
+삭제는 권한이 있는 사용자만 실행할 수 있습니다.
+
+### 변경 문서 동기화
+
+```powershell
+tibero-doc sync
+```
+
+설정된 문서 디렉터리에서 추가되거나 수정된 파일만 다시 처리합니다.
+
+## 문서 관계 확인
+
+업로드한 문서에서 추출된 인물, 조직, 시스템, 정책, 프로젝트와 관계를 확인할 수 있습니다.
+
+```powershell
+tibero-doc graph <DOCUMENT_ID>
+```
+
+기존 문서를 새로운 그래프 검색에 포함해야 할 때 Manager가 전체 재색인을 실행합니다.
+
+```powershell
+tibero-doc graph-reindex
+```
+
+## 그룹과 문서 공유
+
+### 그룹 관리
+
+```powershell
+tibero-doc group create Readers
+tibero-doc group list
+tibero-doc group add-member <GROUP_ID> <USER_ID>
+tibero-doc group remove-member <GROUP_ID> <USER_ID>
+```
+
+### 문서 권한 부여
+
+사용자나 그룹에 문서별 권한을 부여할 수 있습니다.
+
+```powershell
+tibero-doc acl grant <DOCUMENT_ID> <PRINCIPAL_ID> --type group --permission read
+tibero-doc acl list <DOCUMENT_ID>
+tibero-doc acl revoke <DOCUMENT_ID> <PRINCIPAL_ID> --type group
+```
+
+검색, 질문, 본문 조회, 다운로드 모두 이 권한을 따릅니다.
+
+## 워크스페이스 사용
+
+```powershell
+tibero-doc workspace list
+tibero-doc workspace use <WORKSPACE_ID>
+```
+
+워크스페이스를 바꾸면 문서, 검색 결과, 그룹과 권한도 선택한 워크스페이스 기준으로 전환됩니다.
+
+## 관리자 명령
+
+### 사용자 관리
+
+```powershell
+tibero-doc user list
+tibero-doc user change-role <USER_ID> editor
+tibero-doc user disable <USER_ID>
+```
+
+역할은 `viewer`, `editor`, `manager`, `owner`로 구분됩니다.
+
+### 감사 로그
+
+```powershell
+tibero-doc audit --limit 100
+```
+
+로그인, 문서 조회, 권한 변경, 다운로드 등 주요 활동을 확인할 수 있습니다.
+
+### 서비스 상태 진단
+
+```powershell
+tibero-doc status
+tibero-doc worker status
+tibero-doc storage status
+tibero-doc mcp status
+tibero-doc deploy check
+```
+
+### 데이터 보관 계획 확인
+
+```powershell
+tibero-doc retention plan --hot-days 30 --cold-days 180 --delete-days 365
+```
+
+이 명령은 보관 계획을 보여줍니다. 실제 삭제 정책을 적용하기 전에는 조직의 보안·법무 기준을 확인해야 합니다.
+
+### OpenSQL Failover 시연
+
+```powershell
+tibero-doc failover demo
+```
+
+다중 노드 OpenSQL 환경이 준비된 경우 현재 Primary 중단과 새 Primary 선출 과정을 확인합니다.
+
+## MCP 사용
+
+로컬 MCP 서버를 실행합니다.
+
+```powershell
+tibero-doc mcp serve
+```
+
+HTTP 방식으로 실행하려면 다음과 같이 지정합니다.
+
+```powershell
+tibero-doc mcp serve --transport streamable-http --port 8001
+```
+
+MCP 클라이언트에서는 다음 기능을 사용할 수 있습니다.
+
+- 문서 검색
+- 문서 목록 및 본문 조회
+- 문서 엔티티·관계 조회
+- 작업 상태 확인
+- 문서 통계 조회
+
+로컬 MCP와 기본 로컬 임베딩에는 API 키가 필요하지 않습니다. 외부에 MCP HTTP 서버를 공개할 때는 TLS와 별도 접근 인증을 설정해야 합니다.
+
+## 설정 관리
 
 ```powershell
 tibero-doc config show
@@ -72,309 +298,28 @@ tibero-doc config path
 tibero-doc config reset
 ```
 
-## 1. OpenSQL 확인
+`config reset`은 현재 CLI 설정을 초기화하므로 다시 `tibero-doc setup` 또는 `tibero-doc join`을 실행해야 합니다.
 
-현재 컨테이너 기준:
+## 문제가 생겼을 때
 
-```bash
-docker exec opensql-test /home/opensql/bin/patronictl \
-  -c /home/opensql/etc/patroni/patroni.yml list
-```
-
-`Leader | running`이어야 합니다. 컨테이너 내부 직접 연결은 5432, OpenProxy는 6432이며 호스트에서는 각각 15432, 16432입니다.
-
-```bash
-psql -h 127.0.0.1 -p 6432 -U postgres -d opensql -W
-```
-
-## 2. WSL 가상환경과 설치
-
-```bash
-cd /mnt/c/Users/한경민/Desktop/opensource_comp_tibero_opensql
-
-sudo apt update
-sudo apt install -y python3.12-venv
-python3 -m venv .venv-wsl
-source .venv-wsl/bin/activate
-
-python -m pip install -U pip
-python -m pip install -e 'services/api[test]'
-python -m pip install -e cli
-```
-
-## 3. OpenSQL 스키마 적용
-
-호스트에서 OpenProxy로 적용합니다. 비밀번호에 특수문자가 있다면 DSN에서는 URL 인코딩해야 합니다.
-
-```bash
-export PGPASSWORD='실제-postgres-비밀번호'
-psql -h 127.0.0.1 -p 16432 -U postgres -d opensql \
-  -v ON_ERROR_STOP=1 -f infra/opensql/init.sql
-```
-
-스키마에는 `documents`, `document_versions`, `chunks`, `chunk_embeddings`, `pipeline_jobs`, `outbox_events`가 생성됩니다.
-
-## 4. 가장 간단한 실행 — RabbitMQ 불필요
-
-```bash
-source .venv-wsl/bin/activate
-
-export TIBERO_DOC_DSN='postgresql://postgres:URL인코딩된-비밀번호@127.0.0.1:16432/opensql'
-export TIBERO_DOC_DATA_DIR="$PWD/.data"
-export PIPELINE_MODE=inline
-export EMBEDDING_PROVIDER=local
-export EMBEDDING_MODEL=local-hash-384
-
-uvicorn services.api.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-API 문서는 <http://127.0.0.1:8000/docs>에서 볼 수 있습니다.
-
-다른 WSL 터미널에서 CLI를 사용합니다.
-
-```bash
-source .venv-wsl/bin/activate
-tibero-doc init --api-url http://127.0.0.1:8000
-tibero-doc status
-tibero-doc ingest ./tests/fixtures/sample.txt
-tibero-doc list
-tibero-doc search '문서 검색' --top-k 5
-tibero-doc show DOCUMENT_ID
-tibero-doc versions DOCUMENT_ID
-tibero-doc job JOB_ID
-tibero-doc sync
-tibero-doc delete DOCUMENT_ID
-```
-
-## 5. 운영형 비동기 실행 — RabbitMQ
-
-```bash
-docker compose up -d rabbitmq
-export PIPELINE_MODE=queue
-export RABBITMQ_URL='amqp://guest:guest@127.0.0.1:5672/%2F'
-```
-
-API와 워커를 각각 별도 터미널에서 같은 환경 변수로 실행합니다.
-
-```bash
-uvicorn services.api.main:app --host 127.0.0.1 --port 8000
-python -m workers.ingest.main
-python -m workers.embedding.main
-python -m workers.sync.main
-```
-
-Ingest 워커가 문서를 색인하고 embedding 작업을 발행합니다. Sync 워커도 변경 문서마다 embedding 작업을 발행합니다. 작업 상태는 OpenSQL의 `pipeline_jobs`에 저장되므로 프로세스가 달라도 공유됩니다.
-
-## 6. 실제 임베딩 모델 사용
-
-로컬 해시 임베딩은 API 키 없이 전체 흐름을 재현하기 위한 기본 구현입니다. 높은 검색 품질이 필요하면 Ollama 또는 OpenAI-compatible endpoint를 사용합니다.
-
-```bash
-export EMBEDDING_PROVIDER=ollama
-export EMBEDDING_API_URL=http://127.0.0.1:11434/v1
-export EMBEDDING_MODEL=nomic-embed-text
-export EMBEDDING_API_KEY=''
-```
-
-외부 유료 API라면 다음 값만 추가합니다.
-
-```bash
-export EMBEDDING_PROVIDER=openai
-export EMBEDDING_API_URL=https://서비스주소/v1
-export EMBEDDING_MODEL=모델명
-export EMBEDDING_API_KEY=발급받은키
-```
-
-모델을 변경한 뒤 기존 문서도 새 모델로 검색하려면 다시 업로드하거나 embedding 작업을 재실행해야 합니다.
-
-## 7. MCP 서버
-
-로컬 stdio MCP는 API 키가 필요 없습니다.
-
-```bash
-export TIBERO_DOC_DSN='postgresql://postgres:URL인코딩된-비밀번호@127.0.0.1:16432/opensql'
-export EMBEDDING_PROVIDER=local
-python -m services.mcp_server.main
-```
-
-제공 도구:
-
-- `search_documents`
-- `list_documents`
-- `get_document`
-- `get_job_status`
-- `get_document_stats`
-
-Streamable HTTP는 로컬 주소에만 바인딩해서 사용합니다.
-
-```bash
-MCP_TRANSPORT=streamable-http MCP_HOST=127.0.0.1 MCP_PORT=8001 \
-  python -m services.mcp_server.main
-```
-
-현재 MCP HTTP 자체 인증은 포함하지 않았습니다. 인터넷이나 사내망에 공개할 때는 API Gateway/Nginx에서 TLS와 API 키 또는 OAuth 인증을 적용해야 합니다. 임베딩 API 키와 MCP 접근 인증은 서로 다른 개념입니다.
-
-## 8. 테스트
-
-```bash
-pytest tests/unit services/api/tests -q
-
-export TIBERO_DOC_DSN='postgresql://postgres:URL인코딩된-비밀번호@127.0.0.1:16432/opensql'
-export OPENPROXY_TEST_DSN="$TIBERO_DOC_DSN"
-pytest tests/integration/database/test_opensql_platform.py -q
-```
-
-## 처리 흐름
-
-```text
-CLI / MCP / REST
-        |
-        v
-     API Service
-        |
-        +-- upload -> extract -> chunk -> metadata/version
-        +-- embed  -> pgvector
-        +-- search -> FTS + vector -> RRF merge
-        |
-        v
-OpenProxy :16432 -> OpenSQL Primary
-                   documents / versions / chunks
-                   embeddings / jobs / outbox
-                   Patroni <-> etcd
-```
-
-## 다중 사용자 운영 기능
-
-- Argon2 비밀번호 로그인: `POST /v1/auth/login`
-- 15분 Access Token과 30일 회전형 Refresh Token: `POST /v1/auth/refresh`
-- 조직·워크스페이스 격리와 Viewer/Editor/Manager/Owner RBAC
-- 사용자·그룹 단위 문서 ACL
-- SMTP 일회용 초대 메일
-- 감사 로그 API와 `tibero-doc audit`
-- MinIO/S3 AES256 원본 저장과 Presigned Download
-- Redis 분산 Rate Limit과 Nginx IP Rate Limit
-- `/ui/` 사용자 웹 화면
+먼저 자동 진단을 실행합니다.
 
 ```powershell
-tibero-doc login --email admin@example.com
-tibero-doc refresh
-tibero-doc invite user@example.com --role editor
-tibero-doc audit --limit 100
+tibero-doc doctor
 ```
 
-웹 UI는 서버 실행 후 <http://localhost:8000/ui/>에서 사용합니다.
+자주 확인할 항목:
 
-## MinIO·Redis·다중 API·Nginx TLS 배포
+- API 서버를 실행한 터미널이 열려 있는지
+- 일반 사용자가 DB 주소 대신 서비스 API 주소를 입력했는지
+- 관리자 설정의 OpenProxy 호스트와 포트가 올바른지
+- 문서 조회 권한이 사용자 또는 소속 그룹에 부여되었는지
+- 비동기 모드라면 Worker와 RabbitMQ가 실행 중인지
 
-`infra/docker-compose.production.yml`은 API 3개, Worker 3종, RabbitMQ, Redis, MinIO, Nginx를 구성합니다.
+## 개발자 문서
 
-```powershell
-$env:TIBERO_DOC_DSN='postgresql://...'
-$env:MINIO_ROOT_USER='tiberodoc'
-$env:MINIO_ROOT_PASSWORD='충분히-긴-비밀번호'
-$env:PUBLIC_API_URL='https://localhost'
+서비스 내부 구조와 개발 방법은 README에서 분리했습니다.
 
-.\infra\scripts\generate-dev-cert.ps1
-docker compose -f infra\docker-compose.production.yml up -d --build --scale api=3
-```
-
-운영 환경에서는 자체 서명 인증서 대신 공인 CA 또는 사내 CA 인증서를 다음 이름으로 배치합니다.
-
-```text
-infra/nginx/certs/fullchain.pem
-infra/nginx/certs/privkey.pem
-```
-
-SMTP 환경 변수:
-
-```text
-SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM, SMTP_TLS
-```
-
-## OpenSQL 3노드 Failover 시연
-
-이 구성은 노드별 라이선스 사용 권한과 OpenSQL 이미지가 필요합니다.
-
-```powershell
-$env:OPENSQL_BASE_IMAGE='opensql-build-v3:latest'
-$env:OPENSQL_LICENSE_FILE='C:\secure\license.xml'
-$env:OPENSQL_POSTGRES_PASSWORD='...'
-$env:OPENSQL_REPLICATION_PASSWORD='...'
-$env:OPENSQL_REWIND_PASSWORD='...'
-
-docker compose -f infra\docker-compose.ha.yml up -d --build
-.\infra\scripts\failover-demo.ps1
-```
-
-구성은 etcd 3개, Patroni/OpenSQL 3개와 Patroni `/primary` 상태를 검사하는 DB Router로 이루어집니다. 시연 스크립트는 현재 Leader를 찾아 중지하고 45초 내 새 Leader 선출 여부를 검증합니다.
-
-## 관리·에이전트 CLI
-
-```powershell
-tibero-doc group create Readers
-tibero-doc group list
-tibero-doc group add-member <GROUP_ID> <USER_ID>
-tibero-doc group remove-member <GROUP_ID> <USER_ID>
-
-tibero-doc acl grant <DOCUMENT_ID> <PRINCIPAL_ID> --type group --permission read
-tibero-doc acl list <DOCUMENT_ID>
-tibero-doc acl revoke <DOCUMENT_ID> <PRINCIPAL_ID> --type group
-
-tibero-doc workspace list
-tibero-doc workspace use <WORKSPACE_ID>
-tibero-doc user list
-tibero-doc user change-role <USER_ID> editor
-tibero-doc user disable <USER_ID>
-
-tibero-doc ask "고가용성과 관련된 문서를 찾아서 설명해줘"
-tibero-doc download <DOCUMENT_ID> --output report.pdf
-tibero-doc mcp serve --transport streamable-http --port 8001
-tibero-doc mcp status
-tibero-doc worker status
-tibero-doc storage status
-tibero-doc deploy check
-tibero-doc failover demo
-tibero-doc retention plan --hot-days 30 --cold-days 180 --delete-days 365
-```
-
-## OpenSQL 문서 Knowledge Graph
-
-새 문서는 업로드·동기화 시 청크에서 인물, 조직, 시스템, 정책, 프로젝트와 주제를 자동
-추출한다. 같은 청크의 엔티티는 문맥에 따라 `uses`, `references`, `belongs_to`, `manages`,
-`supersedes`, `co_occurs_with` 관계로 연결되며, 모든 관계는 원본 document/chunk를 추적한다.
-
-```powershell
-# 기존 문서를 한 번에 그래프 색인
-tibero-doc graph-reindex
-
-# 한 문서의 엔티티와 관계 조회
-tibero-doc graph <DOCUMENT_ID>
-
-# 그래프 전용 검색과 키워드·벡터·그래프 3-way RRF
-tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
-tibero-doc search "OpenSQL 장애 정책" --mode hybrid
-```
-
-`hybrid` 결과에는 `keyword_rank`, `vector_rank`, `graph_rank`, `entities`가 포함된다. 그래프
-검색에도 기존 workspace와 문서 ACL 조건이 적용된다.
-
-`ask`는 기존 ACL이 허용하는 문서만 하이브리드 검색하고 답변과 인용 문서를 함께 반환한다.
-기본값은 API 키가 필요 없는 `local-extractive` 방식이다. 생성형 답변은 다음 중 하나로 켠다.
-
-```powershell
-# Ollama
-$env:AGENT_PROVIDER="ollama"
-$env:AGENT_MODEL="qwen2.5:7b"
-
-# OpenAI-compatible API
-$env:AGENT_PROVIDER="openai"
-$env:OPENAI_API_KEY="..."
-$env:AGENT_MODEL="gpt-4.1-mini"
-```
-
-로컬 Redis는 `docker compose up -d redis`로 실행한다. 문서는 기본 3회 조회 후 300초 동안
-캐시되며 `DOCUMENT_CACHE_THRESHOLD`, `DOCUMENT_CACHE_TTL_SECONDS`로 조정한다. 모든 캐시
-조회는 OpenSQL ACL 검사를 먼저 수행하고 ACL 변경·문서 삭제 시 즉시 무효화한다.
-
-오래된 비정형 데이터의 Hot/Warm/Cold/삭제 승인 정책은
-[`docs/unstructured-data-lifecycle.md`](docs/unstructured-data-lifecycle.md)에 정리되어 있다.
+- [개발 및 아키텍처 가이드](docs/development-guide.md)
+- [전체 코드 리뷰 가이드](docs/code-review-guide.md)
+- [비정형 데이터 수명주기](docs/unstructured-data-lifecycle.md)
