@@ -30,8 +30,10 @@ def sync_command():
         raise typer.Exit(1)
 
     console.print(
-        "[green]✓ Synchronization completed[/green]"
+        "[green]Synchronization requested[/green]"
     )
+
+    result = result.get("result") or result
 
     console.print(
         f"Added   : {result.get('added', 0)}"

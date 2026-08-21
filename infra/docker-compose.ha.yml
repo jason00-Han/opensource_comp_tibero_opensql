@@ -1,0 +1,53 @@
+x-opensql: &opensql
+  build:
+    context: ./opensql
+    args: {OPENSQL_BASE_IMAGE: "${OPENSQL_BASE_IMAGE:-opensql-build-v3:latest}"}
+  environment: &opensql-env
+    OPENSQL_POSTGRES_PASSWORD: ${OPENSQL_POSTGRES_PASSWORD:?required}
+    OPENSQL_REPLICATION_PASSWORD: ${OPENSQL_REPLICATION_PASSWORD:?required}
+    OPENSQL_REWIND_PASSWORD: ${OPENSQL_REWIND_PASSWORD:?required}
+    OPENSQL_LICENSE_SOURCE: /run/secrets/opensql-license.xml
+    OPENSQL_EXTERNAL_ETCD: "true"
+    OPENSQL_ETCD_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+    OPENSQL_OPENPROXY_ENABLED: "false"
+  volumes:
+    - ${OPENSQL_LICENSE_FILE:?required}:/run/secrets/opensql-license.xml:ro
+  depends_on: [etcd1, etcd2, etcd3]
+  cap_add: [NET_ADMIN, NET_RAW]
+  shm_size: 1gb
+
+services:
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.17
+    command: [etcd,"--name=etcd1","--listen-client-urls=http://0.0.0.0:2379","--advertise-client-urls=http://etcd1:2379","--listen-peer-urls=http://0.0.0.0:2380","--initial-advertise-peer-urls=http://etcd1:2380","--initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380","--initial-cluster-state=new","--initial-cluster-token=opensql-ha"]
+    volumes: [etcd1:/etcd-data]
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.17
+    command: [etcd,"--name=etcd2","--listen-client-urls=http://0.0.0.0:2379","--advertise-client-urls=http://etcd2:2379","--listen-peer-urls=http://0.0.0.0:2380","--initial-advertise-peer-urls=http://etcd2:2380","--initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380","--initial-cluster-state=new","--initial-cluster-token=opensql-ha"]
+    volumes: [etcd2:/etcd-data]
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.17
+    command: [etcd,"--name=etcd3","--listen-client-urls=http://0.0.0.0:2379","--advertise-client-urls=http://etcd3:2379","--listen-peer-urls=http://0.0.0.0:2380","--initial-advertise-peer-urls=http://etcd3:2380","--initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380","--initial-cluster-state=new","--initial-cluster-token=opensql-ha"]
+    volumes: [etcd3:/etcd-data]
+  db1:
+    <<: *opensql
+    environment: {<<: *opensql-env, OPENSQL_NODE_NAME: db1, OPENSQL_NODE_ADDRESS: db1}
+    volumes: [db1:/home/opensql/data/pgsql,"${OPENSQL_LICENSE_FILE}:/run/secrets/opensql-license.xml:ro"]
+    ports: ["18011:8008"]
+  db2:
+    <<: *opensql
+    environment: {<<: *opensql-env, OPENSQL_NODE_NAME: db2, OPENSQL_NODE_ADDRESS: db2}
+    volumes: [db2:/home/opensql/data/pgsql,"${OPENSQL_LICENSE_FILE}:/run/secrets/opensql-license.xml:ro"]
+    ports: ["18012:8008"]
+  db3:
+    <<: *opensql
+    environment: {<<: *opensql-env, OPENSQL_NODE_NAME: db3, OPENSQL_NODE_ADDRESS: db3}
+    volumes: [db3:/home/opensql/data/pgsql,"${OPENSQL_LICENSE_FILE}:/run/secrets/opensql-license.xml:ro"]
+    ports: ["18013:8008"]
+  db-router:
+    image: haproxy:3.0-alpine
+    volumes: ["./haproxy/opensql.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    ports: ["16432:5432", "17000:7000"]
+    depends_on: [db1, db2, db3]
+
+volumes: {etcd1: {}, etcd2: {}, etcd3: {}, db1: {}, db2: {}, db3: {}}

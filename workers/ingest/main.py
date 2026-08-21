@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 
-from packages.core.pipeline import JobPublisher, JobType, JsonJobRepository, PipelineService, RabbitMQPublisher
-from services.api.store import DocumentStore
+from packages.core.pipeline import JobPublisher, JobType, PipelineService, RabbitMQPublisher, job_repository_from_env
+from packages.core.pipeline.service import JobRepository
+from services.api.store import DocumentStore, document_store_from_env
 from workers.common import consume_jobs
+from packages.core.knowledge_graph import KnowledgeGraphService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -14,14 +16,14 @@ LOGGER = logging.getLogger(__name__)
 class IngestJobProcessor:
     def __init__(
         self,
-        jobs: JsonJobRepository | None = None,
+        jobs: JobRepository | None = None,
         documents: DocumentStore | None = None,
         publisher: JobPublisher | None = None,
     ) -> None:
-        repository = jobs or JsonJobRepository()
+        repository = jobs or job_repository_from_env()
         self.pipeline = PipelineService(repository)
         self.next_stage = PipelineService(repository, publisher) if publisher else None
-        self.documents = documents or DocumentStore()
+        self.documents = documents
 
     def process(self, job_id: str) -> dict:
         job = self.pipeline.get(job_id)
@@ -34,17 +36,25 @@ class IngestJobProcessor:
 
         self.pipeline.running(job_id)
         try:
-            record = self.documents.index_upload(job.payload["filename"])
+            documents = self.documents or document_store_from_env(job.payload.get("workspace_id"), job.payload.get("user_id"))
+            record = documents.index_upload(job.payload["filename"], job.payload.get("object_key")) if hasattr(documents, "objects") else documents.index_upload(job.payload["filename"])
             result = {
                 "document_id": record.document_id,
                 "filename": record.filename,
                 "size": record.size,
                 "chunks": record.chunk_count,
             }
+            result["graph"] = KnowledgeGraphService().index_document(
+                job.payload.get("workspace_id") or "00000000-0000-0000-0000-000000000001",
+                record.document_id,
+                documents.chunks_for_document(record.document_id),
+            )
             if self.next_stage:
                 embedding_job = self.next_stage.start(JobType.EMBED_DOCUMENT, {
                     "document_id": record.document_id,
                     "source_job_id": job_id,
+                    "workspace_id": job.payload.get("workspace_id"),
+                    "user_id": job.payload.get("user_id"),
                 })
                 result["embedding_job_id"] = embedding_job.job_id
         except Exception as exc:

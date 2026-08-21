@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
-import fcntl
+from filelock import FileLock
+from psycopg.types.json import Jsonb
 
+from packages.core.database import connect, database_dsn
 from packages.core.pipeline.models import JobStatus, JobType, PipelineJob
 from packages.core.pipeline.publisher import JobPublisher
 
@@ -39,12 +41,8 @@ class JsonJobRepository:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        with self.lock_path.open("a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with FileLock(str(self.lock_path)):
+            yield
 
     def _load(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -87,6 +85,74 @@ class JsonJobRepository:
             jobs[job.job_id] = job.to_dict()
             self._save(jobs)
         return job
+
+
+class OpenSQLJobRepository:
+    """Durable pipeline job repository backed by OpenSQL."""
+
+    def __init__(self, dsn: str | None = None) -> None:
+        self.dsn = dsn or database_dsn()
+        if not self.dsn:
+            raise RuntimeError("TIBERO_DOC_DSN is not configured")
+
+    def create(self, job: PipelineJob) -> PipelineJob:
+        with connect(self.dsn) as connection:
+            connection.execute(
+                """
+                INSERT INTO tibero_doc.pipeline_jobs
+                    (job_id, job_type, stage, status, payload, result, error,
+                     created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    job.job_id, job.type.value, job.stage.value, job.status.value,
+                    Jsonb(job.payload), Jsonb(job.result) if job.result is not None else None,
+                    job.error, job.created_at, job.updated_at,
+                ),
+            )
+        return job
+
+    def get(self, job_id: str) -> PipelineJob | None:
+        with connect(self.dsn) as connection:
+            row = connection.execute(
+                """
+                SELECT job_id, job_type, stage, status, payload, result, error,
+                       created_at, updated_at
+                  FROM tibero_doc.pipeline_jobs
+                 WHERE job_id = %s
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return PipelineJob.from_dict({
+            "job_id": row[0], "type": row[1], "stage": row[2], "status": row[3],
+            "payload": row[4], "result": row[5], "error": row[6],
+            "created_at": row[7].isoformat(), "updated_at": row[8].isoformat(),
+        })
+
+    def save(self, job: PipelineJob) -> PipelineJob:
+        with connect(self.dsn) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tibero_doc.pipeline_jobs
+                   SET status = %s, stage = %s, payload = %s, result = %s,
+                       error = %s, updated_at = %s
+                 WHERE job_id = %s
+                """,
+                (
+                    job.status.value, job.stage.value, Jsonb(job.payload),
+                    Jsonb(job.result) if job.result is not None else None,
+                    job.error, job.updated_at, job.job_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(job.job_id)
+        return job
+
+
+def job_repository_from_env() -> JobRepository:
+    return OpenSQLJobRepository() if database_dsn() else JsonJobRepository()
 
 
 class PipelinePublishError(RuntimeError):

@@ -3,9 +3,7 @@ from rich.console import Console
 
 from tibero_doc.config import save_config
 
-
 console = Console()
-
 
 def init_command(
     api_url: str = typer.Option(

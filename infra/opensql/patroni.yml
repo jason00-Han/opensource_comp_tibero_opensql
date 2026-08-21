@@ -1,12 +1,12 @@
 scope: opensql
-name: postgresql1
+name: {{NODE_NAME}}
 
 restapi:
   listen: 0.0.0.0:8008
-  connect_address: 127.0.0.1:8008
+  connect_address: {{NODE_ADDRESS}}:8008
 
 etcd3:
-  hosts: 127.0.0.1:2379
+  hosts: {{ETCD_HOSTS}}
 
 bootstrap:
   dcs:
@@ -34,7 +34,7 @@ bootstrap:
 
 postgresql:
   listen: 0.0.0.0:5432
-  connect_address: 127.0.0.1:5432
+  connect_address: {{NODE_ADDRESS}}:5432
   data_dir: /home/opensql/data/pgsql
   bin_dir: /home/opensql/bin
   pgpass: /home/opensql/.pgpass

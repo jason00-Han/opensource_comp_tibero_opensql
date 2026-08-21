@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import os
 
-from packages.core.embedding_service import EmbeddingService, JsonEmbeddingRepository, OpenAICompatibleEmbeddingProvider
-from packages.core.pipeline import JobType, JsonJobRepository, PipelineService
-from services.api.store import DocumentStore
+from packages.core.embedding_service import EmbeddingService, embedding_provider_from_env, embedding_repository_from_env
+from packages.core.pipeline import JobType, PipelineService, job_repository_from_env
+from packages.core.pipeline.service import JobRepository
+from services.api.store import DocumentStore, document_store_from_env
 from workers.common import consume_jobs
 
 
@@ -15,15 +16,15 @@ LOGGER = logging.getLogger(__name__)
 class EmbeddingJobProcessor:
     def __init__(
         self,
-        jobs: JsonJobRepository | None = None,
+        jobs: JobRepository | None = None,
         documents: DocumentStore | None = None,
         embeddings: EmbeddingService | None = None,
     ) -> None:
-        self.pipeline = PipelineService(jobs or JsonJobRepository())
-        self.documents = documents or DocumentStore()
+        self.pipeline = PipelineService(jobs or job_repository_from_env())
+        self.documents = documents
         self.embeddings = embeddings or EmbeddingService(
-            OpenAICompatibleEmbeddingProvider(),
-            JsonEmbeddingRepository(),
+            embedding_provider_from_env(),
+            embedding_repository_from_env(),
         )
 
     def process(self, job_id: str) -> dict:
@@ -38,7 +39,8 @@ class EmbeddingJobProcessor:
         self.pipeline.running(job_id)
         try:
             document_id = job.payload["document_id"]
-            chunks = self.documents.chunks_for_document(document_id)
+            documents = self.documents or document_store_from_env(job.payload.get("workspace_id"), job.payload.get("user_id"))
+            chunks = documents.chunks_for_document(document_id)
             if not chunks:
                 raise ValueError(f"No chunks found for document: {document_id}")
             result = self.embeddings.embed_document(document_id, chunks)

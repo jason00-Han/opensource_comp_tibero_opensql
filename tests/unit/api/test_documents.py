@@ -19,6 +19,17 @@ def test_upload_is_persisted_and_queued(api_client, fake_publisher):
     assert fake_publisher.messages == [(body["job_id"], "index_document")]
 
 
+def test_workspace_stats_excludes_queued_document_until_worker_finishes(api_client):
+    response = api_client.post(
+        "/v1/documents",
+        files={"file": ("stats.txt", b"workspace statistics", "text/plain")},
+    )
+    assert response.status_code == 202
+    stats = api_client.get("/v1/stats")
+    assert stats.status_code == 200
+    assert stats.json()["documents"] == 0
+
+
 @pytest.mark.parametrize("filename,content", [("image.png", b"png"), ("empty.txt", b"")])
 def test_upload_validation(api_client, fake_publisher, filename, content):
     response = api_client.post("/v1/documents", files={"file": (filename, content)})
