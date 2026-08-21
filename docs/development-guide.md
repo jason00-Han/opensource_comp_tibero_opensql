@@ -62,6 +62,12 @@ Web UI / CLI / MCP / REST Client
 
 `hybrid` 모드는 RRF(Reciprocal Rank Fusion)로 순위를 합친다. 서로 다른 검색 방식의 원점수를 직접 정규화하지 않고 각 결과의 순위를 이용하므로 구현과 튜닝이 단순하다. 결과에는 `keyword_rank`, `vector_rank`, `graph_rank`, `entities`가 포함된다.
 
+검색 후보는 문서 ID로 그룹화하고 문서별 상위 근거 청크를 기본 3개까지 반환한다. 벡터 전용 후보는
+`VECTOR_MIN_SIMILARITY`(기본 0.50) 미만이면 제외하며, `local-hash-*` 모델은 의미 검색 순위에
+사용하지 않는다. API 결과는 질의 중심 snippet, 일치 단어, PDF 페이지, 의미 유사도와 사용자용
+관련도 레이블을 포함한다. CLI의 내부 순위는 `--explain`에서만 표시한다.
+최종 관련도가 `SEARCH_MIN_RELEVANCE`(기본 0.35)보다 낮은 결과는 사용자에게 반환하지 않는다.
+
 검색 SQL과 RRF 구현은 `services/api/store.py`, 그래프 추출과 색인은 `packages/core/knowledge_graph.py`에 있다.
 
 ## 지식 그래프 색인

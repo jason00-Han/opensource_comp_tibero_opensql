@@ -43,6 +43,7 @@ class Chunk:
     filename: str
     chunk_index: int
     content: str
+    page_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -69,26 +70,39 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def extract_text(path: Path) -> str:
+def extract_pages(path: Path) -> list[tuple[int | None, str]]:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+        pages = [(index, page.extract_text() or "") for index, page in enumerate(PdfReader(path).pages, 1)]
     elif suffix == ".docx":
         document = DocxDocument(path)
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        pages = [(None, "\n".join(paragraph.text for paragraph in document.paragraphs))]
     elif suffix in {".html", ".htm"}:
         parser = _HTMLTextExtractor()
         parser.feed(path.read_text(encoding="utf-8", errors="replace"))
-        text = "\n".join(parser.parts)
+        pages = [(None, "\n".join(parser.parts))]
     elif suffix == ".txt":
-        text = path.read_text(encoding="utf-8", errors="replace")
+        pages = [(None, path.read_text(encoding="utf-8", errors="replace"))]
     else:
         raise ValueError(f"지원하지 않는 파일 형식입니다: {suffix or '(확장자 없음)'}")
 
-    normalized = _normalize_text(text)
+    normalized = [(page, _normalize_text(text)) for page, text in pages if _normalize_text(text)]
     if not normalized:
         raise ValueError("문서에서 텍스트를 추출하지 못했습니다.")
     return normalized
+
+
+def extract_text(path: Path) -> str:
+    """하위 호환용 전체 본문 추출 함수."""
+    return " ".join(text for _page, text in extract_pages(path))
+
+
+def chunks_with_pages(path: Path) -> list[tuple[int | None, str]]:
+    return [
+        (page_number, chunk)
+        for page_number, page_text in extract_pages(path)
+        for chunk in split_text(page_text)
+    ]
 
 
 def split_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> Iterable[str]:
@@ -105,6 +119,36 @@ def split_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> Iterabl
         if end >= len(text):
             break
         start = max(end - overlap, start + 1)
+
+
+def _query_tokens(query: str) -> list[str]:
+    return list(dict.fromkeys(token.lower() for token in TOKEN_PATTERN.findall(query) if len(token) > 1))
+
+
+def _best_snippet(content: str, query: str, limit: int = 320) -> tuple[str, list[str]]:
+    """질의 단어가 가장 많이 포함된 문장 주변을 짧은 근거 문장으로 반환한다."""
+    terms = _query_tokens(query)
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。])\s+|\n+", content) if part.strip()]
+    if not sentences:
+        sentences = [content.strip()]
+    ranked = sorted(
+        enumerate(sentences),
+        key=lambda item: (sum(term in item[1].lower() for term in terms), -item[0]),
+        reverse=True,
+    )
+    center = ranked[0][0]
+    selected = " ".join(sentences[max(0, center - 1): center + 2]).strip()
+    if len(selected) > limit:
+        lowered = selected.lower()
+        positions = [lowered.find(term) for term in terms if lowered.find(term) >= 0]
+        start = max(0, (min(positions) if positions else 0) - limit // 3)
+        selected = selected[start:start + limit].strip()
+        if start:
+            selected = "…" + selected
+        if start + limit < len(content):
+            selected += "…"
+    matched = [term for term in terms if term in selected.lower()]
+    return selected, matched
 
 
 class DocumentStore:
@@ -179,8 +223,8 @@ class DocumentStore:
         checksum = hashlib.sha256(content).hexdigest()
         document_id = checksum[:16]
         chunks = [
-            Chunk(document_id, path.name, position, text)
-            for position, text in enumerate(split_text(extract_text(path)))
+            Chunk(document_id, path.name, position, text, page_number)
+            for position, (page_number, text) in enumerate(chunks_with_pages(path))
         ]
         record = DocumentRecord(document_id, path.name, checksum, len(content), len(chunks))
 
@@ -320,7 +364,7 @@ class OpenSQLDocumentStore(DocumentStore):
         checksum = hashlib.sha256(binary).hexdigest()
         document_id = hashlib.sha256(f"{self.workspace_id}:{checksum}".encode()).hexdigest()[:16]
         object_key = f"{self.workspace_id}/{checksum}/{path.name}"
-        chunk_values = list(split_text(extract_text(path)))
+        chunk_values = chunks_with_pages(path)
         with connect(self.dsn) as connection:
             previous = connection.execute(
                 "SELECT document_id, checksum, size_bytes, chunk_count, version FROM tibero_doc.documents WHERE workspace_id = %s AND filename = %s",
@@ -342,8 +386,8 @@ class OpenSQLDocumentStore(DocumentStore):
             )
             with connection.cursor() as cursor:
                 cursor.executemany(
-                    "INSERT INTO tibero_doc.chunks (document_id, chunk_index, content) VALUES (%s, %s, %s)",
-                    [(document_id, index, content) for index, content in enumerate(chunk_values)],
+                    "INSERT INTO tibero_doc.chunks (document_id, chunk_index, content, page_number) VALUES (%s, %s, %s, %s)",
+                    [(document_id, index, content, page_number) for index, (page_number, content) in enumerate(chunk_values)],
                 )
             connection.execute(
                 """
@@ -358,11 +402,12 @@ class OpenSQLDocumentStore(DocumentStore):
 
     def search(self, query: str, top_k: int, query_vector: list[float] | None = None, model: str | None = None) -> list[dict]:
         candidate_limit = max(top_k * 4, 20)
+        keyword_patterns = [f"%{token}%" for token in _query_tokens(query)] or [f"%{query}%"]
         with connect(self.dsn) as connection:
             with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute(
                     """
-                    SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                    SELECT c.document_id, d.filename, c.chunk_index, c.content, c.page_number,
                            ts_rank_cd(c.search_vector, websearch_to_tsquery('simple', %s)) AS rank
                       FROM tibero_doc.chunks c JOIN tibero_doc.documents d USING (document_id)
                      WHERE d.workspace_id = %s
@@ -370,10 +415,10 @@ class OpenSQLDocumentStore(DocumentStore):
                          SELECT 1 FROM tibero_doc.document_acl a WHERE a.document_id=d.document_id
                            AND ((a.principal_type='user' AND a.principal_id=%s)
                              OR (a.principal_type='group' AND a.principal_id IN (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
-                       AND (c.search_vector @@ websearch_to_tsquery('simple', %s) OR c.content ILIKE %s)
+                       AND (c.search_vector @@ websearch_to_tsquery('simple', %s) OR c.content ILIKE ANY(%s))
                      ORDER BY rank DESC, c.document_id, c.chunk_index LIMIT %s
                     """,
-                    (query, self.workspace_id, self.user_id, self.user_id, self.user_id, query, f"%{query}%", candidate_limit),
+                    (query, self.workspace_id, self.user_id, self.user_id, self.user_id, query, keyword_patterns, candidate_limit),
                 )
                 keyword_rows = cursor.fetchall()
                 vector_rows: list[dict] = []
@@ -381,7 +426,7 @@ class OpenSQLDocumentStore(DocumentStore):
                     literal = vector_literal(query_vector)
                     cursor.execute(
                         """
-                        SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                        SELECT c.document_id, d.filename, c.chunk_index, c.content, c.page_number,
                                e.embedding <=> %s::vector AS distance
                           FROM tibero_doc.chunk_embeddings e
                           JOIN tibero_doc.chunks c USING (document_id, chunk_index)
@@ -415,7 +460,7 @@ class OpenSQLDocumentStore(DocumentStore):
                                 ON r.workspace_id=%s AND
                                    (r.source_entity_id=m.entity_id OR r.target_entity_id=m.entity_id)
                         )
-                        SELECT c.document_id, d.filename, c.chunk_index, c.content,
+                        SELECT c.document_id, d.filename, c.chunk_index, c.content, c.page_number,
                                array_agg(DISTINCT e.name) AS entities,
                                count(DISTINCT e.entity_id) AS entity_matches
                           FROM expanded x
@@ -429,55 +474,103 @@ class OpenSQLDocumentStore(DocumentStore):
                                AND ((a.principal_type='user' AND a.principal_id=%s)
                                  OR (a.principal_type='group' AND a.principal_id IN
                                      (SELECT group_id FROM tibero_doc.group_members WHERE user_id=%s)))))
-                         GROUP BY c.document_id, d.filename, c.chunk_index, c.content
+                         GROUP BY c.document_id, d.filename, c.chunk_index, c.content, c.page_number
                          ORDER BY entity_matches DESC, c.document_id, c.chunk_index LIMIT %s
                         """,
                         (self.workspace_id, patterns, self.workspace_id, self.workspace_id,
                          self.user_id, self.user_id, self.user_id, candidate_limit),
                     )
                     graph_rows = cursor.fetchall()
+        # 해시 임베딩은 파이프라인 데모용이며 의미 유사도로 사용하지 않는다.
+        if model and model.startswith("local-hash-"):
+            vector_rows = []
+        minimum_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.50"))
+        vector_rows = [row for row in vector_rows if 1.0 - float(row["distance"]) >= minimum_similarity]
+
         combined: dict[tuple[str, int], dict] = {}
         for rank, row in enumerate(keyword_rows, start=1):
             key = (row["document_id"], row["chunk_index"])
             combined[key] = {
                 "document_id": row["document_id"], "filename": row["filename"],
                 "chunk_index": row["chunk_index"], "content": row["content"],
+                "page_number": row.get("page_number"),
                 "keyword_rank": rank, "vector_rank": None, "_rrf": 1 / (60 + rank),
-                "graph_rank": None, "entities": [],
+                "graph_rank": None, "entities": [], "vector_similarity": None,
             }
         for rank, row in enumerate(vector_rows, start=1):
             key = (row["document_id"], row["chunk_index"])
             item = combined.setdefault(key, {
                 "document_id": row["document_id"], "filename": row["filename"],
                 "chunk_index": row["chunk_index"], "content": row["content"],
+                "page_number": row.get("page_number"),
                 "keyword_rank": None, "vector_rank": None, "_rrf": 0.0,
-                "graph_rank": None, "entities": [],
+                "graph_rank": None, "entities": [], "vector_similarity": None,
             })
             item["vector_rank"] = rank
+            item["vector_similarity"] = round(1.0 - float(row["distance"]), 6)
             item["_rrf"] += 1 / (60 + rank)
         for rank, row in enumerate(graph_rows, start=1):
             key = (row["document_id"], row["chunk_index"])
             item = combined.setdefault(key, {
                 "document_id": row["document_id"], "filename": row["filename"],
                 "chunk_index": row["chunk_index"], "content": row["content"],
+                "page_number": row.get("page_number"),
                 "keyword_rank": None, "vector_rank": None, "graph_rank": None,
-                "entities": [], "_rrf": 0.0,
+                "entities": [], "vector_similarity": None, "_rrf": 0.0,
             })
             item["graph_rank"] = rank
             item["entities"] = list(row["entities"] or [])
             item["_rrf"] += 1 / (60 + rank)
-        results = sorted(combined.values(), key=lambda item: item["_rrf"], reverse=True)[:top_k]
+        # 같은 문서의 청크를 하나의 결과 카드로 묶고 상위 근거만 보존한다.
+        grouped: dict[str, dict] = {}
+        ordered_chunks = sorted(combined.values(), key=lambda item: item["_rrf"], reverse=True)
+        for item in ordered_chunks:
+            snippet, matched_terms = _best_snippet(item["content"], query)
+            passage = {
+                "chunk_index": item["chunk_index"], "page_number": item.get("page_number"),
+                "snippet": snippet, "matched_terms": matched_terms,
+                "keyword_rank": item.get("keyword_rank"), "vector_rank": item.get("vector_rank"),
+                "graph_rank": item.get("graph_rank"), "vector_similarity": item.get("vector_similarity"),
+            }
+            document = grouped.setdefault(item["document_id"], {
+                "document_id": item["document_id"], "filename": item["filename"],
+                "chunk_index": item["chunk_index"], "page_number": item.get("page_number"),
+                "content": snippet, "snippet": snippet, "matched_terms": matched_terms,
+                "keyword_rank": item.get("keyword_rank"), "vector_rank": item.get("vector_rank"),
+                "graph_rank": item.get("graph_rank"), "vector_similarity": item.get("vector_similarity"),
+                "entities": list(item.get("entities", [])), "passages": [], "_rrf": 0.0,
+            })
+            document["_rrf"] += item["_rrf"]
+            document["entities"] = list(dict.fromkeys(document["entities"] + item.get("entities", [])))
+            for rank_name in ("keyword_rank", "vector_rank", "graph_rank"):
+                rank_value = item.get(rank_name)
+                if rank_value is not None:
+                    current_rank = document.get(rank_name)
+                    document[rank_name] = min(current_rank, rank_value) if current_rank is not None else rank_value
+            if len(document["passages"]) < int(os.getenv("SEARCH_PASSAGES_PER_DOCUMENT", "3")):
+                document["passages"].append(passage)
+
+        results = sorted(grouped.values(), key=lambda item: item["_rrf"], reverse=True)[:top_k]
         for item in results:
-            item["score"] = round(min(1.0, item.pop("_rrf") * 30.5), 6)
-        return results
+            item.pop("_rrf", None)
+            signals = [p["vector_similarity"] for p in item["passages"] if p.get("vector_similarity") is not None]
+            lexical = max((len(p["matched_terms"]) / max(len(_query_tokens(query)), 1) for p in item["passages"]), default=0.0)
+            item["relevance"] = round(max([lexical, *signals]), 6)
+            item["relevance_label"] = "매우 높음" if item["relevance"] >= 0.75 else "높음" if item["relevance"] >= 0.55 else "보통"
+            item["score"] = item["relevance"]
+        minimum_relevance = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
+        return [
+            item for item in results
+            if item["relevance"] >= minimum_relevance or item.get("graph_rank") is not None
+        ]
 
     def chunks_for_document(self, document_id: str) -> list[dict]:
         with connect(self.dsn) as connection:
             rows = connection.execute(
-                "SELECT document_id, chunk_index, content FROM tibero_doc.chunks WHERE document_id = %s ORDER BY chunk_index",
+                "SELECT document_id, chunk_index, content, page_number FROM tibero_doc.chunks WHERE document_id = %s ORDER BY chunk_index",
                 (document_id,),
             ).fetchall()
-        return [{"document_id": row[0], "chunk_index": row[1], "content": row[2]} for row in rows]
+        return [{"document_id": row[0], "chunk_index": row[1], "content": row[2], "page_number": row[3]} for row in rows]
 
     def list_documents(self, limit: int = 100, offset: int = 0) -> list[dict]:
         with connect(self.dsn) as connection:

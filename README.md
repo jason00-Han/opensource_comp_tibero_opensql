@@ -128,7 +128,8 @@ tibero-doc versions <DOCUMENT_ID>
 
 ### 문서 검색
 
-별도 옵션 없이 검색하면 키워드, 의미 유사도, 문서 관계를 함께 사용합니다.
+별도 옵션 없이 검색하면 키워드, 의미 유사도, 문서 관계를 함께 사용합니다. 같은 문서의 여러
+청크는 하나의 문서 카드로 묶이며 가장 관련 있는 근거를 최대 3개까지 보여줍니다.
 
 ```powershell
 tibero-doc search "장애 복구 절차"
@@ -142,12 +143,33 @@ tibero-doc search "접근 통제 정책" --mode keyword
 tibero-doc search "비슷한 보안 규정" --mode vector
 tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
 tibero-doc search "OpenSQL 장애 정책" --mode hybrid
+tibero-doc search "OpenSQL 장애 정책" --mode hybrid --explain
 ```
 
 - `keyword`: 질문에 포함된 단어가 등장하는 문서 검색
 - `vector`: 표현이 달라도 의미가 비슷한 문서 검색
 - `graph`: 인물·조직·시스템·정책·프로젝트와 그 관계 검색
 - `hybrid`: 세 검색 결과를 함께 사용하며 기본값
+
+`--explain`을 추가하면 일반 화면에서 숨긴 키워드·벡터·그래프 순위와 의미 유사도를 확인할 수
+있습니다. PDF는 새로 업로드할 때 근거 페이지 번호도 함께 저장됩니다.
+
+### 실제 의미 검색 모델 사용
+
+기본 해시 임베딩은 의미 검색 결과에서 제외됩니다. 문장의 의미가 비슷한 문서를 찾으려면 Ollama와
+다국어 임베딩 모델을 실행합니다.
+
+```powershell
+docker compose --profile ai up -d ollama
+docker exec opensource_comp_tibero_opensql-ollama-1 ollama pull bge-m3
+```
+
+`tibero-doc setup`에서 임베딩 방식은 `ollama`, 모델은 `bge-m3`로 선택한 뒤 API와 Embedding
+Worker를 다시 시작합니다. 기존 문서는 한 번만 다시 임베딩합니다.
+
+```powershell
+tibero-doc embedding-reindex
+```
 
 ### 문서에 질문하기
 

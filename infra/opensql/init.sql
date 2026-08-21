@@ -217,9 +217,11 @@ CREATE TABLE IF NOT EXISTS tibero_doc.chunks (
     document_id text NOT NULL REFERENCES tibero_doc.documents(document_id) ON DELETE CASCADE,
     chunk_index integer NOT NULL CHECK (chunk_index >= 0),
     content text NOT NULL,
+    page_number integer CHECK (page_number IS NULL OR page_number > 0),
     search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
     PRIMARY KEY (document_id, chunk_index)
 );
+ALTER TABLE tibero_doc.chunks ADD COLUMN IF NOT EXISTS page_number integer;
 
 CREATE INDEX IF NOT EXISTS chunks_search_vector_idx
     ON tibero_doc.chunks USING gin (search_vector);

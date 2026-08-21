@@ -62,3 +62,10 @@ def graph_reindex_command() -> None:
     """현재 워크스페이스의 기존 문서를 지식 그래프로 다시 색인합니다."""
     data = TiberoDocClient().reindex_graph()
     console.print(f"[green]{data['documents']}개 문서의 지식 그래프 색인을 완료했습니다.[/green]")
+
+
+def embedding_reindex_command() -> None:
+    """현재 의미 모델로 기존 문서 임베딩을 다시 생성합니다."""
+    data = TiberoDocClient().reindex_embeddings()
+    action = "작업을 큐에 등록" if data.get("queued") else "색인을 완료"
+    console.print(f"[green]{data['documents']}개 문서의 {data['model']} 임베딩 {action}했습니다.[/green]")

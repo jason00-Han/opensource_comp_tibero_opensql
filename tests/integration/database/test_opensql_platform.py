@@ -38,7 +38,10 @@ def test_document_version_embedding_and_hybrid_search(tmp_path):
         matches = store.search(query, 5, provider.embed([query])[0], provider.model)
         assert matches
         assert matches[0]["document_id"] == second.document_id
-        assert matches[0]["vector_rank"] is not None
+        # 해시 임베딩은 의미 검색 품질을 보장하지 않으므로 벡터 순위에서 제외한다.
+        assert matches[0]["vector_rank"] is None
+        assert matches[0]["keyword_rank"] is not None
+        assert matches[0]["passages"]
         graph_matches = store.search("OpenSQL", 5, provider.embed(["OpenSQL"])[0], provider.model)
         assert graph_matches[0]["graph_rank"] is not None
         assert "OpenSQL" in graph_matches[0]["entities"]

@@ -109,6 +109,11 @@ class TiberoDocClient:
         response.raise_for_status()
         return response.json()
 
+    def reindex_embeddings(self):
+        response = self.client.post("/v1/embeddings/reindex")
+        response.raise_for_status()
+        return response.json()
+
     def delete_document(self, document_id: str):
         response = self.client.delete(f"/v1/documents/{document_id}")
         response.raise_for_status()

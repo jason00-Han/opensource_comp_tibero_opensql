@@ -3,7 +3,7 @@ import typer
 from tibero_doc.commands.ingest import ingest_command
 from tibero_doc.commands.collaboration import audit_command, invite_command, join_command, login_command, refresh_command, whoami_command
 from tibero_doc.commands.init import init_command
-from tibero_doc.commands.manage import delete_command, graph_command, graph_reindex_command, job_command, list_command, show_command, versions_command
+from tibero_doc.commands.manage import delete_command, embedding_reindex_command, graph_command, graph_reindex_command, job_command, list_command, show_command, versions_command
 from tibero_doc.commands.onboarding import doctor_command, serve_command, setup_command
 from tibero_doc.commands.search import search_command
 from tibero_doc.commands.settings import settings_app
@@ -43,6 +43,7 @@ app.command("versions")(versions_command)
 app.command("job")(job_command)
 app.command("graph")(graph_command)
 app.command("graph-reindex")(graph_reindex_command)
+app.command("embedding-reindex")(embedding_reindex_command)
 app.command("ask")(ask_command)
 app.command("download")(download_command)
 app.add_typer(settings_app, name="config")

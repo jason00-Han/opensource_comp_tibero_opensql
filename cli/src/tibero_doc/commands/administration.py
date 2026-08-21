@@ -11,6 +11,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from packages.core.pipeline.models import JobType
+from packages.core.pipeline.routing import queue_for
 from tibero_doc.client import TiberoDocClient
 from tibero_doc.config import get_api_url, load_access_token, load_config, load_password, runtime_environment, save_access_token
 
@@ -128,11 +130,36 @@ def worker_status():
         import pika
         connection = pika.BlockingConnection(pika.URLParameters(os.getenv("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/%2F")))
         channel = connection.channel(); rows = []
-        for queue in ("tibero_doc.ingest", "tibero_doc.embedding", "tibero_doc.sync"):
+        for job_type in (JobType.INDEX_DOCUMENT, JobType.EMBED_DOCUMENT, JobType.SYNC_DOCUMENTS):
+            queue = queue_for(job_type)
             result = channel.queue_declare(queue=queue, passive=True); rows.append((queue, result.method.message_count, result.method.consumer_count))
         connection.close(); _table("Workers", ("Queue", "Messages", "Consumers"), rows)
     except Exception as exc:
         console.print(f"[red]RabbitMQ 점검 실패[/red] {exc}"); raise typer.Exit(1)
+
+
+@worker_app.command("serve")
+def worker_serve(kind: str = typer.Argument(..., help="ingest, embedding 또는 sync")):
+    """저장된 OpenSQL·임베딩 설정으로 Worker 하나를 실행합니다."""
+    modules = {
+        "ingest": "workers.ingest.main",
+        "embedding": "workers.embedding.main",
+        "sync": "workers.sync.main",
+    }
+    if kind not in modules:
+        raise typer.BadParameter("Worker 종류는 ingest, embedding, sync 중 하나여야 합니다.")
+    config = load_config()
+    password = os.getenv("TIBERO_DOC_DB_PASSWORD") or load_password(config)
+    if not password:
+        password = typer.prompt("OpenSQL postgres 비밀번호", hide_input=True)
+    env = dict(os.environ)
+    env.update(runtime_environment(password, config))
+    env.setdefault("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/%2F")
+    env.setdefault("EMBEDDING_API_URL", "http://127.0.0.1:11434/v1")
+    console.print(
+        f"[green]{kind} Worker 시작[/green] · {config['embedding_provider']} / {config['embedding_model']}"
+    )
+    raise typer.Exit(subprocess.call([sys.executable, "-m", modules[kind]], env=env))
 
 
 @storage_app.command("status")

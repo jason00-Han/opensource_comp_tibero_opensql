@@ -268,6 +268,28 @@ def reindex_knowledge_graph(context: AuthContext = Depends(authenticate)) -> dic
     return {"documents": len(results), "results": results}
 
 
+@app.post("/v1/embeddings/reindex")
+def reindex_embeddings(context: AuthContext = Depends(authenticate)) -> dict:
+    """현재 모델로 기존 문서 임베딩을 다시 생성하거나 큐에 등록한다."""
+    require_role(context, "manager")
+    store = _store_for(context)
+    results = []
+    for document in store.list_documents(10000, 0):
+        document_id = document["document_id"]
+        if os.getenv("PIPELINE_MODE", "queue") == "inline":
+            results.append(_embed_document(document_id, store))
+        else:
+            job = get_pipeline().start(JobType.EMBED_DOCUMENT, {
+                "document_id": document_id,
+                "workspace_id": context.workspace_id,
+                "user_id": context.user_id,
+            })
+            results.append({"document_id": document_id, "job_id": job.job_id, "status": job.status})
+    provider = embedding_provider_from_env()
+    audit(context, "embeddings.reindex", "workspace", context.workspace_id, {"documents": len(results), "model": provider.model})
+    return {"documents": len(results), "model": provider.model, "queued": os.getenv("PIPELINE_MODE", "queue") != "inline", "results": results}
+
+
 @app.get("/v1/documents/{document_id}/download")
 def download_document(document_id: str, context: AuthContext = Depends(authenticate)):
     store = _store_for(context)
