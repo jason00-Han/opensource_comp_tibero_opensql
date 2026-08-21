@@ -88,6 +88,11 @@ def extract_pages(path: Path) -> list[tuple[int | None, str]]:
 
     normalized = [(page, _normalize_text(text)) for page, text in pages if _normalize_text(text)]
     if not normalized:
+        if suffix == ".pdf":
+            raise ValueError(
+                "PDF에서 텍스트를 추출하지 못했습니다. "
+                "텍스트 레이어가 없는 스캔 PDF일 수 있습니다. OCR 처리 후 다시 업로드하세요."
+            )
         raise ValueError("문서에서 텍스트를 추출하지 못했습니다.")
     return normalized
 

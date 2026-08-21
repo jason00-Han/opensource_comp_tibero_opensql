@@ -89,6 +89,8 @@ class LokiHandler(logging.Handler):
         threading.Thread(target=self._send_loop, daemon=True, name="loki-log-shipper").start()
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.name.startswith(("httpx", "httpcore")):
+            return
         try:
             entry = {"level": record.levelname, "logger": record.name, "message": self.format(record),
                      "service": self.service, "trace_id": getattr(record, "trace_id", uuid.uuid4().hex[:12])}

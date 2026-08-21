@@ -8,12 +8,14 @@
 | 계층 | 기본 조건 | 저장 위치 | 검색 처리 |
 |---|---|---|---|
 | Hot | 최근 30일 조회 또는 인기 점수 상위 | OpenSQL + Redis + MinIO | 즉시 하이브리드 검색 |
-| Warm | 31~180일, 최근 조회 없음 | OpenSQL + MinIO | Redis 제외, 즉시 검색 |
-| Cold | 181~365일, 법적 보존 대상 또는 낮은 사용량 | MinIO archive prefix/저비용 S3 class | 메타데이터만 검색, 요청 시 복원 |
+| Warm | 기본 31~90일, 최근 조회 없음 | OpenSQL + MinIO Warm bucket | Redis 제외, 즉시 검색 |
+| Cold | 기본 91일 이상, 법적 보존 대상 또는 낮은 사용량 | MinIO Cold bucket/저비용 S3 class | 메타데이터 검색 후 필요 시 복원 |
 | Delete candidate | 365일 초과, 보존 의무·Legal Hold 없음 | 삭제 승인 대기 | 검색 제외 후 30일 유예 |
 
-기간은 환경별 정책으로 바꾸며 문서 `updated_at` 하나만으로 결정하지 않는다. 마지막 조회일,
-조회 횟수, 문서 소유자, 분류 등급, 법적 보존 여부를 함께 사용한다.
+현재 이동 작업의 기본값은 `LIFECYCLE_WARM_DAYS=30`, `LIFECYCLE_COLD_DAYS=90`이다. 환경 변수로
+기간을 바꿀 수 있으며 Warm 기준은 Cold 기준보다 작아야 한다. 운영 정책을 확장할 때는 문서
+`updated_at` 하나만 보지 않고 마지막 조회일, 조회 횟수, 소유자, 분류 등급, Legal Hold를 함께
+평가한다.
 
 ## 처리 원칙
 
@@ -24,6 +26,16 @@
 5. 삭제는 `candidate → owner 승인 → 검색 제외 → 30일 유예 → 원본/청크/임베딩 삭제` 순서로 처리한다.
 6. 모든 archive/restore/delete 작업을 감사 로그와 Outbox에 기록한다.
 7. Redis는 원본 저장소가 아니며 TTL 만료 또는 장애 시 OpenSQL/MinIO에서 재구성한다.
+
+## 현재 이동 작업
+
+`packages/core/lifecycle.py`의 이동 작업은 OpenSQL `object_lifecycle`에서 대상 문서를 조회한다.
+원본을 대상 Warm/Cold bucket으로 복사한 뒤 `HEAD` 요청으로 존재를 확인하고, 확인이 끝난 뒤에만
+원본 객체를 삭제한다. 성공 상태와 대상 bucket은 OpenSQL에 기록한다. 이 순서는 복사 실패 중
+원본이 먼저 사라지는 일을 방지한다.
+
+정책 확인과 실행은 분리한다. 관리자는 먼저 보존 계획을 dry-run으로 검토하고, 승인된 범위만
+배치 작업으로 이동시킨다. 영구 삭제는 이 이동 작업에 포함하지 않는다.
 
 ## 운영 주기
 

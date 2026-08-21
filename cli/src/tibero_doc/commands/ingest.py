@@ -19,6 +19,24 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
+def _http_error_detail(error: httpx.HTTPError) -> str:
+    """API가 제공한 오류 메시지를 CLI 사용자가 바로 조치할 수 있게 표시한다."""
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            payload = error.response.json()
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            if isinstance(detail, list):
+                return "; ".join(
+                    str(item.get("msg", item)) if isinstance(item, dict) else str(item)
+                    for item in detail
+                )
+            if detail:
+                return str(detail)
+        except (ValueError, TypeError):
+            pass
+    return str(error)
+
+
 def ingest_command(
     path: Path = typer.Argument(
         ...,
@@ -67,7 +85,7 @@ def ingest_command(
             client.ingest(file)
 
             console.print(
-                f"[green]✓[/green] {file.name}"
+                "[green]✓[/green] ", file.name,
             )
 
             success += 1
@@ -75,7 +93,7 @@ def ingest_command(
         except httpx.HTTPError as e:
 
             console.print(
-                f"[red]✗[/red] {file.name} - {e}"
+                "[red]✗[/red] ", file.name, " - ", _http_error_detail(e),
             )
 
     console.print()

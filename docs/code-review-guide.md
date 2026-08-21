@@ -403,19 +403,23 @@ Processor는 예외를 잡아 job을 FAILED로 기록한다. `consume_jobs()`는
 | 권한/감사 | groups, group_members, document_acl, audit_logs |
 | 문서 | documents, document_versions, chunks |
 | 검색 | chunk_embeddings(vector) |
+| 지식 그래프 | entities, document_entities, relationships |
 | 작업 | pipeline_jobs, outbox_events |
+| 운영 | data_lineage_events, object_lifecycle, schema_migrations |
 
 주요 인덱스:
 
 - workspace+filename unique
 - workspace+updated_at
 - chunks GIN FTS
-- 384차원 local hash embedding HNSW cosine
+- 임베딩 벡터 HNSW cosine 인덱스(차원은 구성한 모델과 스키마가 일치해야 함)
 - 미발행 outbox partial index
 
-문서 INSERT/UPDATE/DELETE trigger가 `outbox_events`에 변경 이벤트를 기록한다. 현재 코드에는 이
-Outbox를 외부로 발행하고 `published_at`을 갱신하는 전용 dispatcher가 완성되어 있지 않아
-`pending_events`가 계속 증가할 수 있다.
+API는 작업과 Outbox 이벤트를 같은 DB 트랜잭션에 저장한다. Outbox Publisher는
+`FOR UPDATE SKIP LOCKED`로 발행 대상을 나눠 가져와 RabbitMQ에 전달하고, 성공한 이벤트의
+`published_at`을 갱신한다. `locked_at`과 `locked_by`는 Publisher 장애 후 오래된 잠금을 다시
+회수하는 데 사용한다. 기존 DB에 이 열이 없다면 서버와 Worker를 시작하기 전에
+`tibero-doc migrate`를 실행한다.
 
 ## 13. 예외 처리 표
 
@@ -427,7 +431,8 @@ Outbox를 외부로 발행하고 `published_at`을 갱신하는 전용 dispatche
 | 문서 ACL 거부 | HTTP 403 |
 | 리소스 없음 | HTTP 404 |
 | 잘못된 파일·초대 | HTTP 400 |
-| RabbitMQ publish 실패 | job FAILED + HTTP 503 |
+| RabbitMQ 일시 장애 | Outbox 미발행 상태 유지 후 다음 poll에서 재시도 |
+| Worker 처리 실패 | Retry Queue로 지연 재전달, 한도 초과 시 DLQ |
 | inline 색인 실패 | job FAILED + HTTP 422 |
 | Redis 장애 | 캐시/분산 limit 포기 후 OpenSQL 또는 메모리 fallback |
 | 외부 Embedding/LLM HTTP 오류 | 현재 상위로 전파; 502 변환·retry 개선 가능 |
@@ -441,13 +446,17 @@ Outbox를 외부로 발행하고 `published_at`을 갱신하는 전용 dispatche
 | 범주 | 주요 변수 |
 |---|---|
 | DB | `TIBERO_DOC_DSN`, `DATABASE_URL`, `AUTH_MODE` |
-| Pipeline | `PIPELINE_MODE`, `RABBITMQ_URL`, `WORKER_PREFETCH` |
+| Pipeline | `PIPELINE_MODE`, `RABBITMQ_URL`, `WORKER_PREFETCH`, `RABBITMQ_MAX_RETRIES`, `RABBITMQ_RETRY_DELAY_MS` |
+| Outbox | `OUTBOX_BATCH_SIZE`, `OUTBOX_POLL_SECONDS` |
 | 임베딩 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_API_URL`, `EMBEDDING_API_KEY` |
 | Agent | `AGENT_PROVIDER`, `AGENT_MODEL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OLLAMA_BASE_URL` |
 | Redis | `REDIS_URL`, `RATE_LIMIT_PER_MINUTE`, `DOCUMENT_CACHE_THRESHOLD`, `DOCUMENT_CACHE_TTL_SECONDS` |
 | Object | `OBJECT_STORAGE`, `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION` |
 | SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` |
 | MCP | `MCP_TRANSPORT`, `MCP_HOST`, `MCP_PORT`, `TIBERO_DOC_ACCESS_TOKEN` |
+| 관측성 | `WORKER_HEARTBEAT_SECONDS`, `WORKER_HEARTBEAT_TTL`, `WORKER_METRICS_PORT`, `PROMETHEUS_URL`, `LOKI_URL` |
+| 대시보드 | `RABBITMQ_MANAGEMENT_URL`, `PATRONI_API_URLS` |
+| 수명주기 | `LIFECYCLE_WARM_DAYS`, `LIFECYCLE_COLD_DAYS`, `S3_WARM_BUCKET`, `S3_COLD_BUCKET` |
 
 ## 15. 테스트 구조
 
@@ -481,13 +490,14 @@ Failover 테스트는 실제 Primary를 중지하므로 명시적 확인 없이 
 
 - [ ] Object Storage 성공 후 DB 실패 orphan을 정리하는가?
 - [ ] 문서 버전 교체가 한 DB 트랜잭션 안에서 수행되는가?
-- [ ] Outbox dispatcher와 재시도/poison event 처리가 필요한가?
+- [ ] Outbox 발행 성공 전 `published_at`이 기록되지 않는가?
+- [ ] Publisher 장애 후 stale lock이 회수되며 poison event가 다른 이벤트를 막지 않는가?
 - [ ] 문서 ID 16자리 해시의 충돌 정책이 필요한가?
 
 ### 비동기 처리
 
-- [ ] FAILED job 재시도 횟수와 dead-letter queue를 정의할 것인가?
-- [ ] Worker가 항상 ACK하는 현재 정책이 운영 요구에 맞는가?
+- [ ] Retry 횟수·지연과 DLQ 경보 기준이 운영 환경에 맞는가?
+- [ ] ACK는 처리 성공 또는 Retry/DLQ 라우팅 성공 이후에만 수행되는가?
 - [ ] 동일 job 중복 전달 시 processor가 충분히 idempotent한가?
 
 ### 검색·Agent
