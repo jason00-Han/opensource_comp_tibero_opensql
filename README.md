@@ -1,27 +1,65 @@
+<div align="center">
+
 # Tibero Doc
 
-Tibero Doc은 팀 문서를 안전하게 모으고, 필요한 내용을 검색하거나 질문할 수 있는 OpenSQL 기반 문서 관리 서비스입니다.
+### 멈추지 않는 OpenSQL 위에서, 문서를 이해하고 답하는 AI 문서 플랫폼
 
-사용자는 데이터베이스 주소를 알 필요 없이 CLI 또는 웹 브라우저로 문서를 업로드하고 검색할 수 있습니다. 관리자는 사용자, 그룹, 문서 권한과 감사 기록을 관리할 수 있습니다.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-REST_API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/OpenSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](docs/development-guide.md)
+[![MCP](https://img.shields.io/badge/MCP-ready-7C3AED)](docs/development-guide.md)
+[![License](https://img.shields.io/badge/License-Open_Source-22C55E)](#라이선스)
 
-## 사용자가 할 수 있는 일
+문서를 올리면 자동으로 내용을 분석하고, 키워드·의미·관계를 함께 검색합니다.<br>
+사용자는 데이터베이스 접속 정보를 몰라도 CLI와 웹에서 안전하게 문서를 찾고 질문할 수 있습니다.
 
-- PDF, DOCX, TXT, HTML 문서 업로드
-- 제목·본문을 이용한 문서 검색
-- 의미가 비슷한 문서와 관련 엔티티 검색
-- 자연어로 질문하고 근거 문서와 함께 답변받기
-- 문서 목록, 본문, 버전 이력 조회
-- 권한이 있는 원본 문서 다운로드
-- 변경된 문서 자동 동기화
-- 개인 또는 그룹별 문서 공유
-- 여러 워크스페이스 전환
-- 웹 UI, CLI, MCP 클라이언트 사용
+**[빠른 시작](#-빠른-시작)** · **[사용자 가이드](#-사용자-가이드)** · **[관리자 가이드](#-관리자-가이드)** · **[개발자 문서](#-개발자-문서)**
 
-## 빠른 시작
+</div>
+
+---
+
+## 왜 Tibero Doc인가요?
+
+| 기존 문서 관리 | Tibero Doc |
+|---|---|
+| 파일명과 정확한 단어를 알아야 검색 | 표현이 달라도 의미가 가까운 문서 검색 |
+| 같은 문서의 긴 본문을 일일이 확인 | 관련 문장과 PDF 페이지를 근거로 표시 |
+| 문서 추가 후 별도 색인 작업 | 업로드 즉시 추출·청킹·임베딩·그래프 색인 |
+| 사용자마다 DB 접속 정보 필요 | 사용자는 API 주소와 계정만으로 이용 |
+| 서버 장애 시 수동 대응 | OpenSQL 고가용성과 Worker 기반 분산 처리 |
+| 검색 결과만 제공 | 자연어 답변과 인용 문서를 함께 제공 |
+
+## ✨ 핵심 기능
+
+| 기능 | 사용자가 얻는 가치 |
+|---|---|
+| **통합 문서 수집** | PDF, DOCX, TXT, HTML 파일 또는 폴더를 한 번에 업로드 |
+| **의미 기반 검색** | `bge-m3`로 문장의 의미가 비슷한 문서 탐색 |
+| **Graph + Vector 검색** | 인물·조직·시스템·정책·프로젝트 관계까지 함께 검색 |
+| **근거 중심 결과** | 문서별 상위 근거 3개, 일치 단어, PDF 페이지 표시 |
+| **문서 질의응답** | 질문에 답하고 사용한 문서와 청크를 인용 |
+| **안전한 공유** | 워크스페이스, 역할, 사용자·그룹별 문서 ACL 적용 |
+| **변경 추적** | 문서 버전 이력과 변경 파일 증분 동기화 |
+| **운영 관리** | 감사 로그, Rate Limit, Redis 캐시, MinIO/S3 원본 저장 |
+| **다양한 연결 방식** | Web UI, CLI, REST API, MCP 지원 |
+
+## 🧭 서비스 이용 흐름
+
+```mermaid
+flowchart LR
+    A["문서 업로드"] --> B["자동 분석·색인"]
+    B --> C["키워드 + 벡터 + 그래프 검색"]
+    C --> D["문서별 근거 확인"]
+    D --> E["자연어 질문·답변"]
+```
+
+## 🚀 빠른 시작
 
 ### 1. 설치
 
-Windows PowerShell:
+<details open>
+<summary><strong>Windows PowerShell</strong></summary>
 
 ```powershell
 cd C:\path\to\tibero-doc
@@ -30,7 +68,10 @@ python -m venv .venv
 python -m pip install -e services\api -e cli
 ```
 
-WSL/Linux:
+</details>
+
+<details>
+<summary><strong>WSL / Linux</strong></summary>
 
 ```bash
 sudo apt install -y python3-venv
@@ -39,21 +80,17 @@ source .venv/bin/activate
 python -m pip install -e services/api -e cli
 ```
 
-### 2. 최초 관리자 설정
+</details>
 
-서버 관리자가 한 번만 실행합니다.
+### 2. 시작 마법사
+
+서버 관리자가 최초 한 번 실행합니다.
 
 ```powershell
 tibero-doc setup
 ```
 
-마법사가 API 주소, OpenProxy 접속 정보, 문서 저장 위치, 임베딩 방식과 최초 관리자 계정을 설정하고 연결 상태를 검사합니다. 비밀번호는 설정 파일에 평문으로 저장하지 않습니다.
-
-설정에 문제가 있다면 다음 명령으로 원인과 해결 방법을 확인합니다.
-
-```powershell
-tibero-doc doctor
-```
+마법사가 OpenProxy 연결, 저장 위치, 임베딩 모델과 최초 관리자 계정을 설정합니다. DB 비밀번호는 설정 파일에 평문으로 기록하지 않습니다.
 
 ### 3. 서버 실행
 
@@ -61,32 +98,37 @@ tibero-doc doctor
 tibero-doc serve
 ```
 
-기본 접속 주소:
+| 접속 대상 | 주소 또는 명령 |
+|---|---|
+| Web UI | <http://localhost:8000/ui/> |
+| API 문서 | <http://localhost:8000/docs> |
+| 상태 확인 | `tibero-doc status` |
+| 자동 진단 | `tibero-doc doctor` |
 
-- 웹 UI: <http://localhost:8000/ui/>
-- API 문서: <http://localhost:8000/docs>
-- 상태 확인: `tibero-doc status`
+### 4. 첫 문서 검색
 
-서버는 실행한 터미널을 종료할 때까지 동작합니다. CLI를 사용할 때는 새 터미널을 열어 가상환경을 활성화합니다.
+새 터미널에서 가상환경을 활성화한 뒤 실행합니다.
 
-## 로그인과 초대
+```powershell
+tibero-doc ingest .\documents
+tibero-doc search "장애 복구 절차"
+tibero-doc ask "장애가 발생하면 어떻게 복구해야 하는지 근거와 함께 알려줘"
+```
 
-### 기존 사용자 로그인
+> [!TIP]
+> 일반 사용자는 OpenSQL 호스트와 DB 비밀번호가 필요하지 않습니다. 관리자가 전달한 서버 주소와 초대 토큰만 사용합니다.
+
+## 👤 사용자 가이드
+
+### 로그인과 계정 확인
 
 ```powershell
 tibero-doc login --email user@example.com
 tibero-doc whoami
+tibero-doc refresh
 ```
 
-### 새 사용자 초대
-
-Manager 또는 Owner가 초대를 생성합니다.
-
-```powershell
-tibero-doc invite user@example.com --role editor
-```
-
-초대받은 사용자는 전달받은 토큰과 서버 주소만 입력합니다. OpenSQL 주소와 DB 비밀번호는 필요하지 않습니다.
+초대받은 사용자는 다음 명령으로 가입합니다.
 
 ```powershell
 tibero-doc join INVITE_TOKEN `
@@ -95,80 +137,56 @@ tibero-doc join INVITE_TOKEN `
   --server http://docs-server:8000
 ```
 
-Access Token을 갱신하려면 다음 명령을 사용합니다.
+### 문서 업로드와 처리 상태
 
 ```powershell
-tibero-doc refresh
-```
-
-## 문서 사용법
-
-### 문서 업로드
-
-파일 하나 또는 디렉터리를 업로드할 수 있습니다.
-
-```powershell
+# 파일 하나
 tibero-doc ingest .\documents\policy.pdf
+
+# 폴더 전체
 tibero-doc ingest .\documents
-```
 
-업로드 결과로 표시되는 `JOB_ID`는 처리 상태를 확인할 때 사용합니다.
-
-```powershell
+# 비동기 작업 상태
 tibero-doc job <JOB_ID>
 ```
 
-### 문서 목록과 본문 조회
+지원 형식: **PDF · DOCX · TXT · HTML**
+
+### 문서 조회
 
 ```powershell
 tibero-doc list
 tibero-doc show <DOCUMENT_ID>
 tibero-doc versions <DOCUMENT_ID>
+tibero-doc download <DOCUMENT_ID> --output report.pdf
 ```
 
 ### 문서 검색
 
-별도 옵션 없이 검색하면 키워드, 의미 유사도, 문서 관계를 함께 사용합니다. 같은 문서의 여러
-청크는 하나의 문서 카드로 묶이며 가장 관련 있는 근거를 최대 3개까지 보여줍니다.
+기본 `hybrid` 검색은 키워드, 의미 유사도와 지식 그래프 결과를 함께 사용합니다. 같은 문서의 여러 청크는 하나의 카드로 묶이고 가장 관련 있는 근거만 표시됩니다.
 
 ```powershell
-tibero-doc search "장애 복구 절차"
+tibero-doc search "OpenSQL 장애 정책"
 tibero-doc search "OpenSQL 고가용성" --top-k 10
 ```
 
-필요하면 검색 방식을 선택할 수 있습니다.
+| 모드 | 설명 | 예시 |
+|---|---|---|
+| `keyword` | 질문 단어가 등장하는 문서 | `--mode keyword` |
+| `vector` | 표현은 달라도 의미가 비슷한 문서 | `--mode vector` |
+| `graph` | 인물·조직·시스템·정책 관계 | `--mode graph` |
+| `hybrid` | 세 결과를 통합하는 기본 모드 | `--mode hybrid` |
+
+검색 점수를 확인하려면 `--explain`을 추가합니다.
 
 ```powershell
-tibero-doc search "접근 통제 정책" --mode keyword
-tibero-doc search "비슷한 보안 규정" --mode vector
-tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
-tibero-doc search "OpenSQL 장애 정책" --mode hybrid
 tibero-doc search "OpenSQL 장애 정책" --mode hybrid --explain
 ```
 
-- `keyword`: 질문에 포함된 단어가 등장하는 문서 검색
-- `vector`: 표현이 달라도 의미가 비슷한 문서 검색
-- `graph`: 인물·조직·시스템·정책·프로젝트와 그 관계 검색
-- `hybrid`: 세 검색 결과를 함께 사용하며 기본값
+관련도가 기준보다 낮으면 무관한 문서를 억지로 보여주지 않고 다음과 같이 안내합니다.
 
-`--explain`을 추가하면 일반 화면에서 숨긴 키워드·벡터·그래프 순위와 의미 유사도를 확인할 수
-있습니다. PDF는 새로 업로드할 때 근거 페이지 번호도 함께 저장됩니다.
-
-### 실제 의미 검색 모델 사용
-
-기본 해시 임베딩은 의미 검색 결과에서 제외됩니다. 문장의 의미가 비슷한 문서를 찾으려면 Ollama와
-다국어 임베딩 모델을 실행합니다.
-
-```powershell
-docker compose --profile ai up -d ollama
-docker exec opensource_comp_tibero_opensql-ollama-1 ollama pull bge-m3
-```
-
-`tibero-doc setup`에서 임베딩 방식은 `ollama`, 모델은 `bge-m3`로 선택한 뒤 API와 Embedding
-Worker를 다시 시작합니다. 기존 문서는 한 번만 다시 임베딩합니다.
-
-```powershell
-tibero-doc embedding-reindex
+```text
+관련성이 높은 문서를 찾지 못했습니다.
 ```
 
 ### 문서에 질문하기
@@ -177,42 +195,65 @@ tibero-doc embedding-reindex
 tibero-doc ask "고가용성과 관련된 문서를 찾아서 핵심 내용을 설명해줘"
 ```
 
-답변에는 참고한 문서와 근거 청크가 함께 표시됩니다. 기본 설정은 외부 API 키가 필요 없는 로컬 답변 방식입니다.
+답변과 함께 참고 문서, 근거 청크와 관련 엔티티가 표시됩니다.
 
-### 원본 다운로드와 삭제
-
-```powershell
-tibero-doc download <DOCUMENT_ID> --output report.pdf
-tibero-doc delete <DOCUMENT_ID>
-```
-
-삭제는 권한이 있는 사용자만 실행할 수 있습니다.
-
-### 변경 문서 동기화
+### 동기화와 삭제
 
 ```powershell
 tibero-doc sync
+tibero-doc delete <DOCUMENT_ID>
 ```
 
-설정된 문서 디렉터리에서 추가되거나 수정된 파일만 다시 처리합니다.
+## 🧠 실제 의미 검색 사용
 
-## 문서 관계 확인
-
-업로드한 문서에서 추출된 인물, 조직, 시스템, 정책, 프로젝트와 관계를 확인할 수 있습니다.
+로컬에서 API 키 없이 다국어 의미 검색을 사용하려면 Ollama와 `bge-m3`를 실행합니다.
 
 ```powershell
+docker compose --profile ai up -d ollama
+docker exec opensource_comp_tibero_opensql-ollama-1 ollama pull bge-m3
+```
+
+`tibero-doc setup`에서 다음 값을 선택합니다.
+
+```text
+임베딩 방식: ollama
+임베딩 모델: bge-m3
+```
+
+모델을 변경했다면 기존 문서를 한 번 다시 임베딩합니다.
+
+```powershell
+tibero-doc embedding-reindex
+```
+
+> [!NOTE]
+> 데모용 `local-hash-384`는 의미 검색 순위에서 제외됩니다. 실제 의미 검색에는 `bge-m3` 같은 임베딩 모델을 사용하세요.
+
+## 🔗 문서 관계와 지식 그래프
+
+문서에서 인물, 조직, 시스템, 정책, 프로젝트와 주제를 추출하고, 문서·청크 단위 근거와 함께 관계를 저장합니다.
+
+```powershell
+# 문서의 엔티티와 관계 조회
 tibero-doc graph <DOCUMENT_ID>
+
+# 기존 문서 전체 그래프 재색인
+tibero-doc graph-reindex
+
+# 관계 기반 검색
+tibero-doc search "OpenSQL을 사용하는 프로젝트" --mode graph
 ```
 
-기존 문서를 새로운 그래프 검색에 포함해야 할 때 Manager가 전체 재색인을 실행합니다.
+## 👥 협업과 권한
+
+### 워크스페이스
 
 ```powershell
-tibero-doc graph-reindex
+tibero-doc workspace list
+tibero-doc workspace use <WORKSPACE_ID>
 ```
 
-## 그룹과 문서 공유
-
-### 그룹 관리
+### 그룹
 
 ```powershell
 tibero-doc group create Readers
@@ -221,9 +262,7 @@ tibero-doc group add-member <GROUP_ID> <USER_ID>
 tibero-doc group remove-member <GROUP_ID> <USER_ID>
 ```
 
-### 문서 권한 부여
-
-사용자나 그룹에 문서별 권한을 부여할 수 있습니다.
+### 문서 ACL
 
 ```powershell
 tibero-doc acl grant <DOCUMENT_ID> <PRINCIPAL_ID> --type group --permission read
@@ -231,22 +270,14 @@ tibero-doc acl list <DOCUMENT_ID>
 tibero-doc acl revoke <DOCUMENT_ID> <PRINCIPAL_ID> --type group
 ```
 
-검색, 질문, 본문 조회, 다운로드 모두 이 권한을 따릅니다.
+검색, 질문, 본문 조회와 다운로드는 모두 문서 ACL을 먼저 확인합니다.
 
-## 워크스페이스 사용
+## 🛡️ 관리자 가이드
 
-```powershell
-tibero-doc workspace list
-tibero-doc workspace use <WORKSPACE_ID>
-```
-
-워크스페이스를 바꾸면 문서, 검색 결과, 그룹과 권한도 선택한 워크스페이스 기준으로 전환됩니다.
-
-## 관리자 명령
-
-### 사용자 관리
+### 사용자 초대와 관리
 
 ```powershell
+tibero-doc invite user@example.com --role editor
 tibero-doc user list
 tibero-doc user change-role <USER_ID> editor
 tibero-doc user disable <USER_ID>
@@ -254,65 +285,74 @@ tibero-doc user disable <USER_ID>
 
 역할은 `viewer`, `editor`, `manager`, `owner`로 구분됩니다.
 
-### 감사 로그
-
-```powershell
-tibero-doc audit --limit 100
-```
-
-로그인, 문서 조회, 권한 변경, 다운로드 등 주요 활동을 확인할 수 있습니다.
-
-### 서비스 상태 진단
+<details>
+<summary><strong>서비스와 Worker 관리 명령 보기</strong></summary>
 
 ```powershell
 tibero-doc status
+tibero-doc doctor
+
+tibero-doc worker serve ingest
+tibero-doc worker serve embedding
+tibero-doc worker serve sync
 tibero-doc worker status
+
 tibero-doc storage status
-tibero-doc mcp status
 tibero-doc deploy check
+tibero-doc audit --limit 100
 ```
 
-### 데이터 보관 계획 확인
+</details>
+
+<details>
+<summary><strong>보관 정책과 OpenSQL Failover 명령 보기</strong></summary>
 
 ```powershell
 tibero-doc retention plan --hot-days 30 --cold-days 180 --delete-days 365
-```
-
-이 명령은 보관 계획을 보여줍니다. 실제 삭제 정책을 적용하기 전에는 조직의 보안·법무 기준을 확인해야 합니다.
-
-### OpenSQL Failover 시연
-
-```powershell
 tibero-doc failover demo
 ```
 
-다중 노드 OpenSQL 환경이 준비된 경우 현재 Primary 중단과 새 Primary 선출 과정을 확인합니다.
+보관 계획은 삭제 후보만 표시하며 자동 삭제하지 않습니다. Failover 시연은 다중 노드 OpenSQL 환경에서 사용합니다.
 
-## MCP 사용
+</details>
 
-로컬 MCP 서버를 실행합니다.
+## 🔌 MCP 연결
+
+로컬 stdio 서버:
 
 ```powershell
 tibero-doc mcp serve
 ```
 
-HTTP 방식으로 실행하려면 다음과 같이 지정합니다.
+Streamable HTTP 서버:
 
 ```powershell
 tibero-doc mcp serve --transport streamable-http --port 8001
+tibero-doc mcp status
 ```
 
-MCP 클라이언트에서는 다음 기능을 사용할 수 있습니다.
+MCP 클라이언트는 문서 검색·조회, 지식 그래프, 작업 상태와 문서 통계를 사용할 수 있습니다. 로컬 MCP와 Ollama에는 API 키가 필요하지 않습니다.
 
-- 문서 검색
-- 문서 목록 및 본문 조회
-- 문서 엔티티·관계 조회
-- 작업 상태 확인
-- 문서 통계 조회
+> [!WARNING]
+> MCP HTTP 서버를 외부에 공개할 때는 Nginx/API Gateway에서 TLS와 별도 접근 인증을 적용하세요.
 
-로컬 MCP와 기본 로컬 임베딩에는 API 키가 필요하지 않습니다. 외부에 MCP HTTP 서버를 공개할 때는 TLS와 별도 접근 인증을 설정해야 합니다.
+## 🩺 문제 해결
 
-## 설정 관리
+문제가 생기면 가장 먼저 자동 진단을 실행합니다.
+
+```powershell
+tibero-doc doctor
+```
+
+| 증상 | 확인할 항목 |
+|---|---|
+| API 연결 실패 | `tibero-doc serve`가 실행 중인지 확인 |
+| 업로드 작업이 계속 대기 | RabbitMQ와 `ingest`, `embedding` Worker 확인 |
+| 의미 검색 결과 없음 | Ollama, `bge-m3`, `embedding-reindex` 확인 |
+| 문서가 보이지 않음 | 현재 워크스페이스와 문서 ACL 확인 |
+| OpenSQL 로그인 실패 | OpenProxy 호스트·포트와 DB 비밀번호 확인 |
+
+설정 확인과 초기화:
 
 ```powershell
 tibero-doc config show
@@ -320,28 +360,22 @@ tibero-doc config path
 tibero-doc config reset
 ```
 
-`config reset`은 현재 CLI 설정을 초기화하므로 다시 `tibero-doc setup` 또는 `tibero-doc join`을 실행해야 합니다.
+## 📚 개발자 문서
 
-## 문제가 생겼을 때
-
-먼저 자동 진단을 실행합니다.
-
-```powershell
-tibero-doc doctor
-```
-
-자주 확인할 항목:
-
-- API 서버를 실행한 터미널이 열려 있는지
-- 일반 사용자가 DB 주소 대신 서비스 API 주소를 입력했는지
-- 관리자 설정의 OpenProxy 호스트와 포트가 올바른지
-- 문서 조회 권한이 사용자 또는 소속 그룹에 부여되었는지
-- 비동기 모드라면 Worker와 RabbitMQ가 실행 중인지
-
-## 개발자 문서
-
-서비스 내부 구조와 개발 방법은 README에서 분리했습니다.
+README는 사용자 사용법에 집중합니다. 구현 구조와 운영 상세는 다음 문서에서 확인할 수 있습니다.
 
 - [개발 및 아키텍처 가이드](docs/development-guide.md)
 - [전체 코드 리뷰 가이드](docs/code-review-guide.md)
 - [비정형 데이터 수명주기](docs/unstructured-data-lifecycle.md)
+
+## 라이선스
+
+오픈소스 대회 제출 전 프로젝트에 적용할 라이선스를 확정하고 `LICENSE` 파일을 추가해 주세요.
+
+---
+
+<div align="center">
+
+**Tibero Doc — 기업 문서를 안전하게 연결하고, 근거와 함께 답합니다.**
+
+</div>
