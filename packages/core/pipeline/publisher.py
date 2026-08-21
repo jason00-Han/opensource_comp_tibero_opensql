@@ -23,12 +23,29 @@ class RabbitMQPublisher:
         connection = pika.BlockingConnection(pika.URLParameters(self.url))
         try:
             channel = connection.channel()
+            retry_queue = f"{queue_name}.retry"
+            dead_queue = f"{queue_name}.dlq"
+            channel.queue_declare(queue=dead_queue, durable=True)
+            channel.queue_declare(
+                queue=retry_queue,
+                durable=True,
+                arguments={
+                    "x-message-ttl": int(os.getenv("RABBITMQ_RETRY_DELAY_MS", "5000")),
+                    "x-dead-letter-exchange": "",
+                    "x-dead-letter-routing-key": queue_name,
+                },
+            )
             channel.queue_declare(queue=queue_name, durable=True)
             channel.basic_publish(
                 exchange="",
                 routing_key=queue_name,
                 body=json.dumps({"job_id": job_id}).encode(),
-                properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent),
+                properties=pika.BasicProperties(
+                    delivery_mode=pika.DeliveryMode.Persistent,
+                    content_type="application/json",
+                    message_id=job_id,
+                    headers={"x-retry-count": 0},
+                ),
             )
         finally:
             connection.close()

@@ -90,6 +90,8 @@ class JsonJobRepository:
 class OpenSQLJobRepository:
     """Durable pipeline job repository backed by OpenSQL."""
 
+    uses_transactional_outbox = True
+
     def __init__(self, dsn: str | None = None) -> None:
         self.dsn = dsn or database_dsn()
         if not self.dsn:
@@ -110,6 +112,15 @@ class OpenSQLJobRepository:
                     job.error, job.created_at, job.updated_at,
                 ),
             )
+            if os.getenv("PIPELINE_MODE", "queue").lower() == "queue":
+                connection.execute(
+                    """
+                    INSERT INTO tibero_doc.outbox_events
+                        (event_type, aggregate_id, payload)
+                    VALUES ('pipeline.job.created', %s, %s)
+                    """,
+                    (job.job_id, Jsonb({"job_id": job.job_id, "job_type": job.type.value})),
+                )
         return job
 
     def get(self, job_id: str) -> PipelineJob | None:
@@ -183,6 +194,10 @@ class PipelineService:
         ))
         if self.publisher is None:
             return job
+        # OpenSQLJobRepository committed the job and outbox row atomically. A separate
+        # publisher delivers it; direct publish here would create duplicate messages.
+        if getattr(self.repository, "uses_transactional_outbox", False):
+            return job
         try:
             self.publisher.publish(job.job_id, job.type)
         except Exception as exc:
@@ -202,6 +217,10 @@ class PipelineService:
     def fail(self, job_id: str, error: str) -> PipelineJob:
         return self._transition(job_id, JobStatus.FAILED, error=error)
 
+    def retry(self, job_id: str) -> PipelineJob:
+        """Moves a failed job back to queued when RabbitMQ redelivers it."""
+        return self._transition(job_id, JobStatus.QUEUED)
+
     def _transition(
         self,
         job_id: str,
@@ -217,7 +236,7 @@ class PipelineService:
             JobStatus.QUEUED: {JobStatus.RUNNING, JobStatus.FAILED},
             JobStatus.RUNNING: {JobStatus.COMPLETED, JobStatus.FAILED},
             JobStatus.COMPLETED: set(),
-            JobStatus.FAILED: set(),
+            JobStatus.FAILED: {JobStatus.QUEUED},
         }
         if status not in allowed[current.status]:
             raise PipelineStateError(f"Invalid job transition: {current.status} -> {status}")
