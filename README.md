@@ -365,6 +365,7 @@ tibero-doc config reset
 README는 사용자 사용법에 집중합니다. 구현 구조와 운영 상세는 다음 문서에서 확인할 수 있습니다.
 
 - [개발 및 아키텍처 가이드](docs/development-guide.md)
+- [데이터 플랫폼 운영 가이드](docs/data-platform-operations.md)
 - [전체 코드 리뷰 가이드](docs/code-review-guide.md)
 - [비정형 데이터 수명주기](docs/unstructured-data-lifecycle.md)
 

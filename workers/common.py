@@ -21,15 +21,40 @@ def consume_jobs(job_type: JobType, process: Callable[[str], object]) -> None:
     queue_name = queue_for(job_type)
     connection = pika.BlockingConnection(pika.URLParameters(broker.url))
     channel = connection.channel()
+    retry_queue = f"{queue_name}.retry"
+    dead_queue = f"{queue_name}.dlq"
+    retry_delay = int(os.getenv("RABBITMQ_RETRY_DELAY_MS", "5000"))
+    max_retries = int(os.getenv("RABBITMQ_MAX_RETRIES", "3"))
+    channel.queue_declare(queue=dead_queue, durable=True)
+    channel.queue_declare(queue=retry_queue, durable=True, arguments={
+        "x-message-ttl": retry_delay,
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": queue_name,
+    })
     channel.queue_declare(queue=queue_name, durable=True)
     channel.basic_qos(prefetch_count=int(os.getenv("WORKER_PREFETCH", "1")))
 
-    def consume(ch, method, _properties, body: bytes) -> None:
+    def consume(ch, method, properties, body: bytes) -> None:
         try:
-            process(json.loads(body)["job_id"])
-        except Exception:
-            LOGGER.exception("Invalid or unknown %s job message", job_type)
-        finally:
+            result = process(json.loads(body)["job_id"])
+            if isinstance(result, dict) and result.get("status") == "failed":
+                raise RuntimeError(result.get("error") or "worker reported failure")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exception as exc:
+            headers = dict(properties.headers or {})
+            attempts = int(headers.get("x-retry-count", 0)) + 1
+            destination = retry_queue if attempts <= max_retries else dead_queue
+            headers.update({"x-retry-count": attempts, "x-last-error": str(exc)[:500]})
+            LOGGER.exception("Job failed; routing to %s (attempt %s/%s)", destination, attempts, max_retries)
+            ch.basic_publish(
+                exchange="", routing_key=destination, body=body,
+                properties=pika.BasicProperties(
+                    delivery_mode=pika.DeliveryMode.Persistent,
+                    content_type="application/json",
+                    message_id=properties.message_id,
+                    headers=headers,
+                ),
+            )
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue=queue_name, on_message_callback=consume)

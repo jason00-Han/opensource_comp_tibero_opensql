@@ -8,6 +8,7 @@ from packages.core.pipeline.service import JobRepository
 from services.api.store import DocumentStore, document_store_from_env
 from workers.common import consume_jobs
 from packages.core.knowledge_graph import KnowledgeGraphService
+from packages.core.lineage import record_lineage
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,8 +30,10 @@ class IngestJobProcessor:
         job = self.pipeline.get(job_id)
         if job is None:
             raise KeyError(f"Unknown job: {job_id}")
-        if job.status.is_final:
+        if job.status.value == "completed":
             return job.to_dict()
+        if job.status.value == "failed":
+            job = self.pipeline.retry(job_id)
         if job.type != JobType.INDEX_DOCUMENT:
             raise ValueError(f"Ingest worker cannot process: {job.type}")
 
@@ -49,6 +52,10 @@ class IngestJobProcessor:
                 record.document_id,
                 documents.chunks_for_document(record.document_id),
             )
+            record_lineage("document.indexed", workspace_id=job.payload.get("workspace_id"),
+                           document_id=record.document_id, source_uri=job.payload.get("object_key"),
+                           input_version=getattr(record, "version", None), job_id=job_id,
+                           metadata={"chunks": record.chunk_count, "filename": record.filename})
             if self.next_stage:
                 embedding_job = self.next_stage.start(JobType.EMBED_DOCUMENT, {
                     "document_id": record.document_id,

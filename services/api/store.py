@@ -347,6 +347,12 @@ class OpenSQLDocumentStore(DocumentStore):
         stored = super().save_upload(filename, content)
         object_key = f"{self.workspace_id}/{stored.checksum}/{stored.filename}"
         self.objects.put(object_key, content, mimetypes.guess_type(stored.filename)[0] or "application/octet-stream")
+        with connect(self.dsn) as connection:
+            connection.execute(
+                """INSERT INTO tibero_doc.object_lifecycle(object_key,document_id,storage_tier,last_accessed_at)
+                   VALUES (%s,%s,'hot',now()) ON CONFLICT(object_key) DO UPDATE SET last_accessed_at=now()""",
+                (object_key, stored.document_id),
+            )
         return StoredDocument(stored.document_id, stored.filename, stored.checksum, stored.size, stored.path, object_key)
 
     def index_upload(self, filename: str, object_key: str | None = None) -> DocumentRecord:

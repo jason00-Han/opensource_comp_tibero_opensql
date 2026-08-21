@@ -37,6 +37,8 @@ class S3ObjectStorage(ObjectStorage):
     def __init__(self) -> None:
         import boto3
         self.bucket = os.getenv("S3_BUCKET", "tibero-documents")
+        self.read_buckets = [self.bucket, os.getenv("S3_WARM_BUCKET", f"{self.bucket}-warm"),
+                             os.getenv("S3_COLD_BUCKET", f"{self.bucket}-cold")]
         self.client = boto3.client(
             "s3", endpoint_url=os.getenv("S3_ENDPOINT_URL"),
             aws_access_key_id=os.getenv("S3_ACCESS_KEY_ID"),
@@ -52,13 +54,30 @@ class S3ObjectStorage(ObjectStorage):
         self.client.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type, ServerSideEncryption="AES256")
 
     def get(self, key: str) -> bytes:
-        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        for bucket in self.read_buckets:
+            try:
+                return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            except self.client.exceptions.NoSuchKey:
+                continue
+            except Exception as exc:
+                if "NoSuchKey" not in str(exc) and "404" not in str(exc):
+                    raise
+        raise FileNotFoundError(key)
 
     def delete(self, key: str) -> None:
-        self.client.delete_object(Bucket=self.bucket, Key=key)
+        for bucket in self.read_buckets:
+            self.client.delete_object(Bucket=bucket, Key=key)
 
     def download_url(self, key: str, expires: int = 300) -> str:
-        return self.client.generate_presigned_url("get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires)
+        if not hasattr(self.client, "head_object"):
+            return self.client.generate_presigned_url("get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires)
+        for bucket in self.read_buckets:
+            try:
+                self.client.head_object(Bucket=bucket, Key=key)
+                return self.client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires)
+            except Exception:
+                continue
+        raise FileNotFoundError(key)
 
 
 def object_storage_from_env() -> ObjectStorage:

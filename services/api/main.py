@@ -28,8 +28,10 @@ from services.api.agent import answer_question
 from services.api.cache import document_cache
 from services.api.email_service import send_invitation
 from services.api.rate_limit import RateLimitMiddleware
+from services.api.metrics import PrometheusMiddleware, metrics_response
 from packages.core.database import connect
 from packages.core.knowledge_graph import KnowledgeGraphService
+from packages.core.lifecycle import MinIOTierManager
 from psycopg.rows import dict_row
 
 
@@ -39,6 +41,7 @@ app = FastAPI(
     description="OpenSQL 기반 자동화 AI 문서 관리 및 하이브리드 검색 API",
 )
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(PrometheusMiddleware)
 web_dir = Path(__file__).resolve().parents[1] / "web"
 if web_dir.exists():
     app.mount("/ui", StaticFiles(directory=web_dir, html=True), name="web-ui")
@@ -92,6 +95,11 @@ class AgentRequest(BaseModel):
 
 class RoleRequest(BaseModel):
     role: str = Field(pattern="^(viewer|editor|manager|owner)$")
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    return metrics_response()
 
 
 def get_store() -> DocumentStore:
@@ -205,6 +213,32 @@ async def ingest_document(file: UploadFile = File(...), context: AuthContext = D
 @app.get("/v1/documents")
 def list_documents(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), context: AuthContext = Depends(authenticate)) -> dict:
     return {"documents": _store_for(context).list_documents(limit, offset), "limit": limit, "offset": offset}
+
+
+@app.get("/v1/documents/{document_id}/lineage")
+def document_lineage(document_id: str, context: AuthContext = Depends(authenticate)) -> dict:
+    if not can_access_document(context, document_id):
+        raise HTTPException(status_code=403, detail="문서 접근 권한이 없습니다.")
+    if not database_dsn():
+        return {"document_id": document_id, "events": []}
+    with connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            rows = cursor.execute("""SELECT operation,source_uri,input_version,output_model,job_id,metadata,created_at
+                 FROM tibero_doc.data_lineage_events
+                WHERE document_id=%s AND (workspace_id=%s OR workspace_id IS NULL)
+                ORDER BY created_at""",
+            (document_id, context.workspace_id)).fetchall()
+    return {"document_id": document_id, "events": [dict(row) for row in rows]}
+
+
+@app.post("/v1/admin/storage/lifecycle/run")
+def run_storage_lifecycle(context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    if os.getenv("OBJECT_STORAGE", "local").lower() not in {"s3", "minio"}:
+        raise HTTPException(status_code=409, detail="MinIO/S3 저장소에서만 실행할 수 있습니다.")
+    result = MinIOTierManager().transition_due()
+    audit(context, "storage.lifecycle.run", "workspace", context.workspace_id, result)
+    return {"status": "completed", "transitioned": result}
 
 
 @app.get("/v1/documents/{document_id}")

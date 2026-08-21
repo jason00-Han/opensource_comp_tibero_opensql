@@ -24,8 +24,10 @@ class SyncJobProcessor:
         job = self.pipeline.get(job_id)
         if job is None:
             raise KeyError(f"Unknown job: {job_id}")
-        if job.status.is_final:
+        if job.status.value == "completed":
             return job.to_dict()
+        if job.status.value == "failed":
+            job = self.pipeline.retry(job_id)
         if job.type != JobType.SYNC_DOCUMENTS:
             raise ValueError(f"Sync worker cannot process: {job.type}")
 

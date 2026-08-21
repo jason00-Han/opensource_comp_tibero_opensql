@@ -42,6 +42,12 @@ services:
     environment: *app-env
     depends_on: [rabbitmq, minio]
     restart: unless-stopped
+  outbox-publisher:
+    build: ..
+    command: python -m workers.outbox
+    environment: *app-env
+    depends_on: [rabbitmq]
+    restart: unless-stopped
 
   nginx:
     image: nginx:1.27-alpine
@@ -57,6 +63,7 @@ services:
     volumes: ["redis-data:/data"]
   rabbitmq:
     image: rabbitmq:4-management
+    ports: ["15672:15672", "15692:15692"]
     volumes: ["rabbitmq-data:/var/lib/rabbitmq"]
   minio:
     image: minio/minio:latest
@@ -65,8 +72,47 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
     volumes: ["minio-data:/data"]
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    depends_on: [api, rabbitmq]
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+  airflow:
+    image: apache/airflow:2.10.4-python3.12
+    profiles: ["batch"]
+    command: standalone
+    environment:
+      AIRFLOW_CONN_TIBERO_DOC_API: ${AIRFLOW_CONN_TIBERO_DOC_API:-http://api:8000}
+      TIBERO_DOC_MAINTENANCE_TOKEN: ${TIBERO_DOC_MAINTENANCE_TOKEN:?required}
+      TIBERO_DOC_DSN: ${TIBERO_DOC_DSN:?required}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?required}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?required}
+      S3_BUCKET: tibero-documents
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ..:/opt/tibero-doc:ro
+      - airflow-data:/opt/airflow
+    ports: ["8080:8080"]
+    depends_on: [api, minio]
 
 volumes:
   redis-data:
   rabbitmq-data:
   minio-data:
+  prometheus-data:
+  grafana-data:
+  airflow-data:
