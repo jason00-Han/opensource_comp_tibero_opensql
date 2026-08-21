@@ -10,6 +10,7 @@ import pika
 from packages.core.pipeline.models import JobType
 from packages.core.pipeline.publisher import RabbitMQPublisher
 from packages.core.pipeline.routing import queue_for
+from packages.core.observability import WorkerHeartbeat, configure_loki_logging
 
 
 LOGGER = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ LOGGER = logging.getLogger(__name__)
 def consume_jobs(job_type: JobType, process: Callable[[str], object]) -> None:
     """Consume one worker type's durable queue; safe to run in many processes."""
     broker = RabbitMQPublisher()
+    configure_loki_logging(f"worker-{job_type.stage.value}")
+    heartbeat = WorkerHeartbeat(job_type.stage.value)
+    heartbeat.start()
     queue_name = queue_for(job_type)
     connection = pika.BlockingConnection(pika.URLParameters(broker.url))
     channel = connection.channel()
@@ -35,12 +39,19 @@ def consume_jobs(job_type: JobType, process: Callable[[str], object]) -> None:
     channel.basic_qos(prefetch_count=int(os.getenv("WORKER_PREFETCH", "1")))
 
     def consume(ch, method, properties, body: bytes) -> None:
+        job_id = "unknown"
+        started = None
         try:
-            result = process(json.loads(body)["job_id"])
+            job_id = json.loads(body)["job_id"]
+            started = heartbeat.processing(job_id)
+            result = process(job_id)
             if isinstance(result, dict) and result.get("status") == "failed":
                 raise RuntimeError(result.get("error") or "worker reported failure")
+            heartbeat.finished(started, True)
             ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as exc:
+            if started is not None:
+                heartbeat.finished(started, False)
             headers = dict(properties.headers or {})
             attempts = int(headers.get("x-retry-count", 0)) + 1
             destination = retry_queue if attempts <= max_retries else dead_queue

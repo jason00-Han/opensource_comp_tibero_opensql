@@ -1,18 +1,49 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tibero Doc</title><style>
-:root{font-family:Inter,Pretendard,sans-serif;color:#17202a;background:#f5f7fb}*{box-sizing:border-box}body{margin:0}.shell{max-width:1100px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;font-size:24px;color:#132c59}.card{background:white;border:1px solid #e5e9f2;border-radius:16px;padding:20px;margin-top:18px;box-shadow:0 8px 30px #20355a10}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}input,button,select{padding:11px 13px;border-radius:9px;border:1px solid #ccd4e0;font:inherit}button{background:#1d5ee8;color:white;border:0;font-weight:700;cursor:pointer}.muted{color:#6e7a8c}.result{padding:14px 0;border-bottom:1px solid #edf0f5}.hidden{display:none}.error{color:#c62828}.pill{padding:5px 9px;background:#eaf1ff;color:#174faa;border-radius:99px;font-size:12px}@media(max-width:700px){.grid{grid-template-columns:1fr}}
-</style></head><body><main class="shell">
-<header class="top"><div><div class="brand">Tibero Doc</div><div class="muted">OpenSQL 기반 안전한 AI 문서 검색</div></div><span id="identity" class="pill">로그인 필요</span></header>
-<section id="login" class="card"><h2>로그인</h2><div class="grid"><input id="email" placeholder="이메일"><input id="password" type="password" placeholder="비밀번호"></div><button style="margin-top:12px" onclick="login()">로그인</button><p id="loginError" class="error"></p></section>
-<div id="app" class="hidden"><section class="card"><h2>문서 검색</h2><div style="display:flex;gap:8px"><input id="query" style="flex:1" placeholder="찾고 싶은 내용을 자연어로 입력하세요"><button onclick="search()">검색</button></div><div id="results"></div></section>
-<div class="grid"><section class="card"><h2>문서 업로드</h2><input id="file" type="file"><button onclick="upload()">업로드</button><p id="uploadState" class="muted"></p></section><section class="card"><h2>내 워크스페이스</h2><button onclick="loadDocuments()">문서 새로고침</button><div id="documents"></div></section></div></div>
-</main><script>
-const api='';let access=sessionStorage.getItem('access');const headers=()=>access?{'Authorization':'Bearer '+access}:{};
-async function login(){const r=await fetch(api+'/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value,password:password.value})});if(!r.ok){loginError.textContent=(await r.json()).detail;return}const d=await r.json();access=d.access_token;sessionStorage.setItem('access',access);showApp()}
-async function showApp(){const r=await fetch('/v1/me',{headers:headers()});if(!r.ok)return;const me=await r.json();identity.textContent=me.display_name+' · '+me.role;login.classList.add('hidden');app.classList.remove('hidden');loadDocuments()}
-async function loadDocuments(){const r=await fetch('/v1/documents',{headers:headers()});const d=await r.json();documents.innerHTML=(d.documents||[]).map(x=>`<div class="result"><b>${esc(x.filename)}</b><br><span class="muted">v${x.version} · ${x.chunk_count} chunks</span></div>`).join('')||'<p class="muted">문서가 없습니다.</p>'}
-async function upload(){const f=file.files[0];if(!f)return;const b=new FormData();b.append('file',f);uploadState.textContent='분석 중...';const r=await fetch('/v1/documents',{method:'POST',headers:headers(),body:b});uploadState.textContent=r.ok?'업로드 및 임베딩 완료':(await r.json()).detail;if(r.ok)loadDocuments()}
-async function search(){const r=await fetch('/v1/search',{method:'POST',headers:{...headers(),'Content-Type':'application/json'},body:JSON.stringify({query:query.value,mode:'hybrid',top_k:10})});const d=await r.json();results.innerHTML=(d.results||[]).map(x=>`<div class="result"><b>${esc(x.filename)}</b> <span class="pill">${x.score}</span><p>${esc(x.content)}</p></div>`).join('')||'<p class="muted">검색 결과가 없습니다.</p>'}
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));if(access)showApp();
-</script></body></html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tibero Doc Operations</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <link rel="stylesheet" href="/ui/layout.css">
+</head>
+<body>
+<section id="loginView" class="login-view">
+  <div class="login-art"><div class="logo-mark">T</div><p>OPENSQL AI DOCUMENT PLATFORM</p><h1>문서의 흐름을<br>한눈에 관리하세요.</h1><span>고가용성 데이터베이스와 지능형 검색 파이프라인을 하나의 운영 화면에서 확인합니다.</span></div>
+  <form id="loginForm" class="login-card"><div class="eyebrow">WELCOME BACK</div><h2>Tibero Doc 로그인</h2><label>이메일<input id="email" type="email" required placeholder="admin@localhost"></label><label>비밀번호<input id="password" type="password" required placeholder="비밀번호"></label><button>대시보드 시작하기</button><p id="loginError" class="error"></p></form>
+</section>
+
+<div id="appView" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo-mark small">T</div><div><b>Tibero Doc</b><span>Operations</span></div></div>
+    <nav>
+      <button class="nav active" data-view="dashboard"><span>◫</span> 운영 대시보드</button>
+      <button class="nav" data-view="documents"><span>▤</span> 문서 저장소</button>
+      <button class="nav" data-view="search"><span>⌕</span> AI 검색</button>
+      <button class="nav" data-view="members"><span>⌘</span> 사용자·그룹</button>
+      <button class="nav" data-view="logs"><span>≡</span> 통합 로그</button>
+    </nav>
+    <div class="sidebar-foot"><div id="identityAvatar" class="avatar">U</div><div><b id="identityName">사용자</b><span id="identityRole">role</span></div><button id="logout" title="로그아웃">↗</button></div>
+  </aside>
+  <main class="main">
+    <header><div><div class="eyebrow">TIBERO DOC CONTROL PLANE</div><h1 id="pageTitle">운영 대시보드</h1></div><div class="header-actions"><div id="globalHealth" class="health"><i></i><span>확인 중</span></div><span id="updatedAt" class="updated">—</span><button id="refresh" class="icon-button">↻</button></div></header>
+
+    <section id="dashboard" class="view active-view">
+      <div id="serviceStrip" class="service-strip"></div>
+      <div id="kpis" class="kpi-grid"></div>
+      <div class="dashboard-grid">
+        <article class="panel span-7"><div class="panel-head"><div><span class="eyebrow">HIGH AVAILABILITY</span><h3>OpenSQL 클러스터</h3></div><span id="primaryBadge" class="badge">PRIMARY —</span></div><div id="nodes" class="node-list empty">Patroni 연결을 확인하는 중입니다.</div></article>
+        <article class="panel span-5"><div class="panel-head"><div><span class="eyebrow">LIVE PROCESS</span><h3>Worker 상태</h3></div><span id="workerCount" class="badge neutral">0 ONLINE</span></div><div id="workers" class="worker-list empty">Heartbeat를 기다리는 중입니다.</div></article>
+        <article class="panel span-7"><div class="panel-head"><div><span class="eyebrow">MESSAGE FLOW</span><h3>RabbitMQ 파이프라인</h3></div><div id="queueTotals" class="tiny-stat"></div></div><div id="queues" class="queue-list"></div></article>
+        <article class="panel span-5"><div class="panel-head"><div><span class="eyebrow">OPENSQL JOBS</span><h3>작업 분포</h3></div></div><div class="job-layout"><div id="jobDonut" class="donut"><div><b>0</b><span>TOTAL</span></div></div><div id="jobLegend" class="legend"></div></div><div id="metrics" class="metric-row"></div></article>
+        <article class="panel span-12"><div class="panel-head"><div><span class="eyebrow">LATEST ACTIVITY</span><h3>최근 문서 처리</h3></div><button class="text-button" data-go="documents">전체 문서 보기 →</button></div><div class="table-wrap"><table><thead><tr><th>문서</th><th>소유자</th><th>버전</th><th>청크</th><th>임베딩</th><th>수정 시각</th></tr></thead><tbody id="recentDocuments"></tbody></table></div></article>
+      </div>
+    </section>
+
+    <section id="documents" class="view"><div class="section-tools"><div><h2>문서 저장소</h2><p>OpenSQL에 저장된 문서와 임베딩 처리 상태입니다.</p></div><label class="upload-button">+ 문서 업로드<input id="file" type="file" hidden></label></div><p id="uploadState" class="notice hidden"></p><div id="documentCards" class="document-grid"></div></section>
+    <section id="search" class="view"><div class="search-hero"><span class="eyebrow">GRAPH + VECTOR + KEYWORD</span><h2>기업 문서를 의미로 검색하세요</h2><div class="search-box"><input id="query" placeholder="예: 장애 복구 절차와 관련된 문서를 찾아줘"><button id="searchButton">검색</button></div></div><div id="results" class="results"></div></section>
+    <section id="members" class="view"><div class="section-tools"><div><h2>사용자·그룹 관계</h2><p>워크스페이스 소속과 그룹 권한 관계를 시각화합니다.</p></div></div><article class="panel"><div id="membershipGraph" class="membership-graph"></div></article></section>
+    <section id="logs" class="view"><div class="section-tools"><div><h2>통합 로그</h2><p>Loki가 수집한 API와 Worker의 최근 구조화 로그입니다.</p></div><select id="logLevel"><option value="">전체 레벨</option><option>ERROR</option><option>WARNING</option><option>INFO</option></select></div><article class="panel log-panel"><div id="logRows"></div></article></section>
+  </main>
+</div>
+<script src="/ui/app.js"></script>
+</body></html>

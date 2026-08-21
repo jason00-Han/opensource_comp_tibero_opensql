@@ -12,7 +12,7 @@ from tibero_doc.commands.sync import sync_command
 from tibero_doc.commands.agent import ask_command
 from tibero_doc.commands.administration import (
     acl_app, deploy_app, download_command, failover_app, group_app, mcp_app,
-    retention_app, storage_app, user_app, worker_app, workspace_app,
+    retention_app, storage_app, user_app, worker_app, workspace_app, migrate_command,
 )
 
 
@@ -33,6 +33,7 @@ app.command("refresh")(refresh_command)
 app.command("audit")(audit_command)
 app.command("init", hidden=True)(init_command)
 app.command("status")(status_command)
+app.command("migrate")(migrate_command)
 app.command("ingest")(ingest_command)
 app.command("search")(search_command)
 app.command("sync")(sync_command)

@@ -30,6 +30,23 @@ failover_app = typer.Typer(help="OpenSQL HA Failover를 시연합니다.")
 retention_app = typer.Typer(help="오래된 비정형 문서의 보존 후보를 분석합니다.")
 
 
+def migrate_command() -> None:
+    """저장된 OpenSQL 자격 증명으로 미적용 스키마 마이그레이션을 실행합니다."""
+    config = load_config()
+    password = os.getenv("TIBERO_DOC_DB_PASSWORD") or load_password(config)
+    if not password:
+        password = typer.prompt("OpenSQL postgres 비밀번호", hide_input=True)
+    env = dict(os.environ)
+    env.update(runtime_environment(password, config))
+    root = Path(__file__).resolve().parents[4]
+    console.print("[cyan]OpenSQL 스키마 마이그레이션을 확인합니다.[/cyan]")
+    code = subprocess.call([sys.executable, str(root / "scripts" / "migrate.py")], env=env, cwd=root)
+    if code:
+        console.print("[red]마이그레이션에 실패했습니다. OpenSQL 연결과 DB 권한을 확인하세요.[/red]")
+        raise typer.Exit(code)
+    console.print("[green]OpenSQL 스키마가 최신 상태입니다.[/green]")
+
+
 def _table(title, columns, rows):
     table = Table(title=title)
     for column in columns: table.add_column(column)
@@ -139,15 +156,16 @@ def worker_status():
 
 
 @worker_app.command("serve")
-def worker_serve(kind: str = typer.Argument(..., help="ingest, embedding 또는 sync")):
+def worker_serve(kind: str = typer.Argument(..., help="ingest, embedding, sync 또는 outbox")):
     """저장된 OpenSQL·임베딩 설정으로 Worker 하나를 실행합니다."""
     modules = {
         "ingest": "workers.ingest.main",
         "embedding": "workers.embedding.main",
         "sync": "workers.sync.main",
+        "outbox": "workers.outbox",
     }
     if kind not in modules:
-        raise typer.BadParameter("Worker 종류는 ingest, embedding, sync 중 하나여야 합니다.")
+        raise typer.BadParameter("Worker 종류는 ingest, embedding, sync, outbox 중 하나여야 합니다.")
     config = load_config()
     password = os.getenv("TIBERO_DOC_DB_PASSWORD") or load_password(config)
     if not password:
@@ -156,9 +174,7 @@ def worker_serve(kind: str = typer.Argument(..., help="ingest, embedding 또는 
     env.update(runtime_environment(password, config))
     env.setdefault("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/%2F")
     env.setdefault("EMBEDDING_API_URL", "http://127.0.0.1:11434/v1")
-    console.print(
-        f"[green]{kind} Worker 시작[/green] · {config['embedding_provider']} / {config['embedding_model']}"
-    )
+    console.print(f"[green]{kind} Worker 시작[/green] · OpenSQL 설정과 저장된 자격 증명을 사용합니다.")
     raise typer.Exit(subprocess.call([sys.executable, "-m", modules[kind]], env=env))
 
 

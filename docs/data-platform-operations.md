@@ -18,7 +18,7 @@ OpenSQL에서 pipeline job과 `pipeline.job.created` outbox row를 같은 transa
 
 ```powershell
 python scripts/migrate.py
-python -m workers.outbox
+tibero-doc worker serve outbox
 ```
 
 ## Prometheus와 Grafana
@@ -31,6 +31,31 @@ docker compose -f infra/docker-compose.production.yml up -d prometheus grafana
 
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`
+
+## 통합 운영 대시보드
+
+`http://localhost:8000/`은 `/ui/`로 이동해 통합 운영 화면을 엽니다. Manager 이상만 Dashboard API를 사용할 수 있으며 브라우저에는 인프라 비밀번호를 전달하지 않습니다.
+
+| 데이터 | 담당 시스템 | 대시보드 표시 |
+|---|---|---|
+| 영구 업무 상태 | OpenSQL | 문서·사용자·그룹·Job·Outbox |
+| 작업 전달 | RabbitMQ | Ready·Processing·Retry·DLQ·Consumer |
+| 현재 생존 상태 | Redis | Worker heartbeat·현재 Job·누적 처리량 |
+| 수치 시계열 | Prometheus | RPS·p95·Worker 처리율 |
+| 구조화 로그 | Loki | API·Worker 오류와 최근 이벤트 |
+| HA 노드 | Patroni API | Primary·Replica·Lag·Timeline |
+
+```powershell
+docker compose up -d redis rabbitmq loki prometheus grafana
+$env:REDIS_URL="redis://127.0.0.1:6379/0"
+$env:RABBITMQ_MANAGEMENT_URL="http://127.0.0.1:15672"
+$env:PROMETHEUS_URL="http://127.0.0.1:9090"
+$env:LOKI_URL="http://127.0.0.1:3100"
+$env:PATRONI_API_URLS="http://127.0.0.1:8008,http://127.0.0.1:8009,http://127.0.0.1:8010"
+tibero-doc serve
+```
+
+Worker는 10초마다 Redis TTL heartbeat를 갱신합니다. Worker 프로세스가 종료되면 기본 30초 후 키가 사라져 대시보드에서 Offline으로 판단합니다. 설정을 적용한 뒤 기존 Worker는 재시작해야 합니다.
 
 ## Airflow 재색인 배치
 

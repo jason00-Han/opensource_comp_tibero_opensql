@@ -7,6 +7,13 @@ services:
       PIPELINE_MODE: queue
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
       REDIS_URL: redis://redis:6379/0
+      RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      PATRONI_API_URLS: ${PATRONI_API_URLS:-}
+      WORKER_METRICS_PORT: 9100
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
       OBJECT_STORAGE: minio
       S3_ENDPOINT_URL: http://minio:9000
@@ -79,7 +86,12 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports: ["9090:9090"]
-    depends_on: [api, rabbitmq]
+    depends_on: [api, rabbitmq, loki]
+  loki:
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/local-config.yaml
+    ports: ["3100:3100"]
+    volumes: ["loki-data:/loki"]
   grafana:
     image: grafana/grafana:11.4.0
     environment:
@@ -116,3 +128,4 @@ volumes:
   prometheus-data:
   grafana-data:
   airflow-data:
+  loki-data:
