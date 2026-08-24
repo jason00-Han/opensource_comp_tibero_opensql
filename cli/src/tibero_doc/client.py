@@ -1,9 +1,28 @@
+import os
 from pathlib import Path
 
 import httpx
 import click
 
 from tibero_doc.config import get_api_url, load_access_token
+
+
+def upload_timeout() -> httpx.Timeout | None:
+    """Return the configured document-transfer timeout.
+
+    Indexing is asynchronous in queue mode, but a large original file can
+    still take longer than a normal API request to reach the API and object
+    storage. By default no client-side deadline is imposed; deployments may
+    set a positive value in seconds when they need an upper bound.
+    """
+    try:
+        raw_value = os.getenv("TIBERO_DOC_HTTP_TIMEOUT_SECONDS", "").strip().lower()
+        if raw_value in {"", "0", "none", "off"}:
+            return None
+        seconds = float(raw_value)
+    except ValueError:
+        return None
+    return httpx.Timeout(max(1.0, seconds), connect=10.0)
 
 
 class TiberoDocClient:
@@ -29,7 +48,7 @@ class TiberoDocClient:
         token = load_access_token(self.api_url)
         self.client = httpx.Client(
             base_url=self.api_url,
-            timeout=30.0,
+            timeout=upload_timeout(),
             headers={"Authorization": f"Bearer {token}"} if token else {},
             event_hooks={"response": [self._compatibility_hint]},
         )

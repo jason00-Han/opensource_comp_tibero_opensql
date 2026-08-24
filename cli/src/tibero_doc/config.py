@@ -19,7 +19,8 @@ DEFAULT_CONFIG = {
     "db_user": "postgres",
     "db_name": "opensql",
     "data_dir": str(CONFIG_DIR / "data"),
-    "pipeline_mode": "inline",
+    # 대용량 문서에서도 업로드 요청을 빠르게 반환하는 운영 기본값이다.
+    "pipeline_mode": "queue",
     "embedding_provider": "local",
     "embedding_model": "local-hash-384",
     "auth_mode": "required",
