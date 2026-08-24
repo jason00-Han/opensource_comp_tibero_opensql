@@ -32,9 +32,10 @@ class OpenSQLOutboxRepository:
             raise RuntimeError("TIBERO_DOC_DSN is not configured")
 
     def claim_batch(self, limit: int = 100) -> list[OutboxEvent]:
-        with connect(self.dsn) as connection:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                rows = cursor.execute("""
+        try:
+            with connect(self.dsn) as connection:
+                with connection.cursor(row_factory=dict_row) as cursor:
+                    rows = cursor.execute("""
                 UPDATE tibero_doc.outbox_events o
                    SET locked_at = now(), locked_by = %s
                  WHERE event_id IN (
@@ -45,7 +46,13 @@ class OpenSQLOutboxRepository:
                         FOR UPDATE SKIP LOCKED LIMIT %s)
                 RETURNING event_id::text, event_type, aggregate_id, payload, attempts
                 """,
-                (os.getenv("HOSTNAME", "outbox-publisher"), limit)).fetchall()
+                    (os.getenv("HOSTNAME", "outbox-publisher"), limit)).fetchall()
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "42703":
+                raise RuntimeError(
+                    "Outbox 스키마가 오래되었습니다. `tibero-doc migrate` 실행 후 Worker를 다시 시작하세요."
+                ) from exc
+            raise
         return [OutboxEvent(**row) for row in rows]
 
     def published(self, event_id: str) -> None:

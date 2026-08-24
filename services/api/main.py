@@ -29,6 +29,8 @@ from services.api.cache import document_cache
 from services.api.email_service import send_invitation
 from services.api.rate_limit import RateLimitMiddleware
 from services.api.metrics import PrometheusMiddleware, metrics_response
+from services.api.dashboard import dashboard_overview
+from packages.core.observability import configure_loki_logging
 from packages.core.database import connect
 from packages.core.knowledge_graph import KnowledgeGraphService
 from packages.core.lifecycle import MinIOTierManager
@@ -42,6 +44,7 @@ app = FastAPI(
 )
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(PrometheusMiddleware)
+configure_loki_logging("tibero-doc-api")
 web_dir = Path(__file__).resolve().parents[1] / "web"
 if web_dir.exists():
     app.mount("/ui", StaticFiles(directory=web_dir, html=True), name="web-ui")
@@ -102,6 +105,12 @@ def prometheus_metrics() -> Response:
     return metrics_response()
 
 
+@app.get("/v1/admin/dashboard/overview")
+def operations_dashboard(context: AuthContext = Depends(authenticate)) -> dict:
+    require_role(context, "manager")
+    return dashboard_overview(context)
+
+
 def get_store() -> DocumentStore:
     return document_store_from_env()
 
@@ -138,9 +147,9 @@ def _index_graph(document_id: str, workspace_id: str, store: DocumentStore) -> d
     return KnowledgeGraphService().index_document(workspace_id, document_id, store.chunks_for_document(document_id))
 
 
-@app.get("/")
-def root() -> dict:
-    return {"name": "Tibero Doc API", "status": "running", "docs": "/docs"}
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/ui/")
 
 
 @app.get("/health")
