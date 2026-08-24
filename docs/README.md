@@ -2,12 +2,12 @@
 
 프로젝트 문서는 사용 목적에 따라 분리되어 있습니다.
 
-| 문서 | 대상 | 내용 |
-|---|---|---|
-| [프로젝트 README](../README.md) | 사용자·심사위원 | 설치, 로그인, 업로드, 검색, 대시보드 |
-| [개발 및 아키텍처 가이드](development-guide.md) | 개발자 | 구성요소, 데이터 모델, 요청 흐름, 확장 지점 |
-| [데이터 플랫폼 운영 가이드](data-platform-operations.md) | 운영자 | 실행, Worker, Retry/DLQ, Outbox, 관측성, 장애 대응 |
-| [코드 리뷰 가이드](code-review-guide.md) | 코드 리뷰어 | 주요 함수·클래스·예외 처리 경계 |
+| 문서 | 대상            | 내용 |
+|---|-----------------|---|
+| [프로젝트 README](../README.md) | 사용자          | 설치, 로그인, 업로드, 검색, 대시보드 |
+| [개발 및 아키텍처 가이드](development-guide.md) | 개발자          | 구성요소, 데이터 모델, 요청 흐름, 확장 지점 |
+| [데이터 플랫폼 운영 가이드](data-platform-operations.md) | 운영자          | 실행, Worker, Retry/DLQ, Outbox, 관측성, 장애 대응 |
+| [코드 리뷰 가이드](code-review-guide.md) | 코드 리뷰어     | 주요 함수·클래스·예외 처리 경계 |
 | [비정형 데이터 수명주기](unstructured-data-lifecycle.md) | 데이터 엔지니어 | Hot/Warm/Cold, 보존, 삭제 승인 |
 
 ## 처음 읽는 순서
