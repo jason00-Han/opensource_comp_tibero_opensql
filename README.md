@@ -23,17 +23,6 @@
 
 ---
 
-## 프로젝트가 해결하는 문제
-
-| 기존 방식 | Tibero Doc |
-|---|---|
-| 파일명이나 정확한 단어를 알아야 검색 | 키워드·벡터·그래프를 결합한 의미 검색 |
-| 문서 추가 후 수동 색인 | 업로드 즉시 추출·청킹·임베딩·관계 색인 |
-| 검색 결과의 근거가 불명확 | 문서별 근거 문장, 점수, PDF 페이지 제공 |
-| 사용자별 접근 범위 관리가 어려움 | Workspace·RBAC·사용자/그룹 ACL 적용 |
-| DB 또는 Worker 장애 시 작업 유실 위험 | OpenSQL HA, RabbitMQ Retry/DLQ, Transactional Outbox |
-| 운영 상태가 여러 시스템에 흩어짐 | OpenSQL·RabbitMQ·Redis·Prometheus·Loki 통합 대시보드 |
-
 ## 주요 기능
 
 - **자동 문서 처리** — PDF, DOCX, TXT, HTML 업로드와 버전·메타데이터 관리
@@ -44,37 +33,6 @@
 - **데이터 플랫폼 운영** — MinIO Hot/Warm/Cold, Airflow 재색인, 데이터 계보
 - **통합 관측성** — Worker heartbeat, 큐 상태, RPS, p95, 로그, OpenSQL 노드 상태
 - **표준 연결** — Web UI, Typer CLI, OpenAPI REST, MCP stdio/HTTP
-
-## 시스템 구성과 처리 흐름
-
-대표 구조도는 위 이미지를 참고하세요. 구현 관점의 데이터 흐름은 다음과 같습니다.
-
-```mermaid
-flowchart LR
-    USER["사용자"] --> WEB["Web Dashboard"]
-    USER --> CLI["Tibero Doc CLI"]
-    AI["AI Client"] --> MCP["MCP Server"]
-    WEB --> API["FastAPI"]
-    CLI --> API
-    MCP --> API
-
-    API --> DB["OpenProxy → OpenSQL"]
-    API --> OUTBOX["Transactional Outbox"]
-    OUTBOX --> MQ["RabbitMQ"]
-    MQ --> IW["Ingest Worker"]
-    MQ --> EW["Embedding Worker"]
-    MQ --> SW["Sync Worker"]
-
-    IW --> OBJ["MinIO / S3"]
-    EW --> OLLAMA["Ollama bge-m3"]
-    IW --> DB
-    EW --> DB
-    SW --> DB
-
-    API --> REDIS["Redis"]
-    API --> PROM["Prometheus"]
-    API --> LOKI["Loki"]
-```
 
 ## 🚀 5분 빠른 시작
 
@@ -274,6 +232,48 @@ tibero-doc mcp status
 ```
 
 로컬 MCP와 Ollama에는 API 키가 필요하지 않습니다. 외부 공개 시 Nginx/API Gateway에서 TLS와 접근 인증을 적용해야 합니다.
+
+## 프로젝트가 해결하는 문제
+
+| 기존 방식 | Tibero Doc |
+|---|---|
+| 파일명이나 정확한 단어를 알아야 검색 | 키워드·벡터·그래프를 결합한 의미 검색 |
+| 문서 추가 후 수동 색인 | 업로드 즉시 추출·청킹·임베딩·관계 색인 |
+| 검색 결과의 근거가 불명확 | 문서별 근거 문장, 점수, PDF 페이지 제공 |
+| 사용자별 접근 범위 관리가 어려움 | Workspace·RBAC·사용자/그룹 ACL 적용 |
+| DB 또는 Worker 장애 시 작업 유실 위험 | OpenSQL HA, RabbitMQ Retry/DLQ, Transactional Outbox |
+| 운영 상태가 여러 시스템에 흩어짐 | OpenSQL·RabbitMQ·Redis·Prometheus·Loki 통합 대시보드 |
+
+## 시스템 구성과 처리 흐름
+
+대표 구조도는 상단 이미지를 참고하세요. 구현 관점의 데이터 흐름은 다음과 같습니다.
+
+```mermaid
+flowchart LR
+    USER["사용자"] --> WEB["Web Dashboard"]
+    USER --> CLI["Tibero Doc CLI"]
+    AI["AI Client"] --> MCP["MCP Server"]
+    WEB --> API["FastAPI"]
+    CLI --> API
+    MCP --> API
+
+    API --> DB["OpenProxy → OpenSQL"]
+    API --> OUTBOX["Transactional Outbox"]
+    OUTBOX --> MQ["RabbitMQ"]
+    MQ --> IW["Ingest Worker"]
+    MQ --> EW["Embedding Worker"]
+    MQ --> SW["Sync Worker"]
+
+    IW --> OBJ["MinIO / S3"]
+    EW --> OLLAMA["Ollama bge-m3"]
+    IW --> DB
+    EW --> DB
+    SW --> DB
+
+    API --> REDIS["Redis"]
+    API --> PROM["Prometheus"]
+    API --> LOKI["Loki"]
+```
 
 ## 🧪 테스트
 
