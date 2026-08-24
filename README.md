@@ -15,6 +15,10 @@
 
 **[5분 빠른 시작](#-5분-빠른-시작)** · **[사용 방법](#-사용-방법)** · **[운영 대시보드](#-운영-대시보드)** · **[개발 문서](#-개발-문서)**
 
+<img src="docs/assets/tibero-doc-architecture.png" alt="Tibero Doc OpenSQL AI 문서 플랫폼 아키텍처" width="100%" />
+
+<sub>사용자·AI Client부터 OpenSQL·Worker·Object Storage·관측성까지 이어지는 Tibero Doc의 전체 처리 흐름</sub>
+
 </div>
 
 ---
@@ -41,7 +45,9 @@
 - **통합 관측성** — Worker heartbeat, 큐 상태, RPS, p95, 로그, OpenSQL 노드 상태
 - **표준 연결** — Web UI, Typer CLI, OpenAPI REST, MCP stdio/HTTP
 
-## 시스템 한눈에 보기
+## 시스템 구성과 처리 흐름
+
+대표 구조도는 위 이미지를 참고하세요. 구현 관점의 데이터 흐름은 다음과 같습니다.
 
 ```mermaid
 flowchart LR
