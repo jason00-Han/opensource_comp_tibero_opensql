@@ -34,6 +34,12 @@ def _http_error_detail(error: httpx.HTTPError) -> str:
                 return str(detail)
         except (ValueError, TypeError):
             pass
+    if isinstance(error, httpx.TimeoutException):
+        return (
+            "업로드 시간이 초과되었습니다. API가 queue 모드로 재시작되었는지, "
+            "RabbitMQ/저장소가 정상인지 확인하세요. 큰 파일은 "
+            "TIBERO_DOC_HTTP_TIMEOUT_SECONDS 값을 더 크게 설정하거나 0으로 설정해 제한을 해제할 수 있습니다."
+        )
     return str(error)
 
 

@@ -77,6 +77,11 @@ def setup_command() -> None:
     db_user = typer.prompt("DB 사용자", default=current["db_user"])
     db_name = typer.prompt("OpenProxy 풀 이름", default=current["db_name"])
     data_dir = typer.prompt("문서 저장 경로", default=current["data_dir"])
+    pipeline_mode = typer.prompt(
+        "문서 처리 방식 (queue/inline)", default=current["pipeline_mode"]
+    ).strip().lower()
+    if pipeline_mode not in {"queue", "inline"}:
+        raise typer.BadParameter("문서 처리 방식은 queue 또는 inline이어야 합니다.")
     embedding_provider = typer.prompt(
         "임베딩 방식 (local/ollama/openai)", default=current["embedding_provider"]
     )
@@ -90,7 +95,7 @@ def setup_command() -> None:
         db_user=db_user,
         db_name=db_name,
         data_dir=str(Path(data_dir).expanduser()),
-        pipeline_mode="inline",
+        pipeline_mode=pipeline_mode,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
     )

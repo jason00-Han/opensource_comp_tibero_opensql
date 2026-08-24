@@ -67,7 +67,10 @@ class StoredDocument:
 
 
 def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    # PostgreSQL text columns reject NUL bytes. Some PDF text extractors emit
+    # them for embedded fonts or malformed content, so remove them before
+    # chunking and before any value reaches full-text/vector indexing.
+    return re.sub(r"\s+", " ", text.replace("\x00", "")).strip()
 
 
 def extract_pages(path: Path) -> list[tuple[int | None, str]]:

@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12', cache: pip}
-      - run: pip install -e './services/api[test]'
+      - run: pip install -e './services/api[test]' -e './cli'
       - run: pytest tests/unit services/api/tests -q
   integration:
     runs-on: ubuntu-latest
@@ -19,7 +19,7 @@ jobs:
         ports: ['5672:5672']
         options: --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 10s --health-timeout 5s --health-retries 10
       minio:
-        image: bitnami/minio:latest
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
         ports: ['9000:9000']
         env: {MINIO_ROOT_USER: minioadmin, MINIO_ROOT_PASSWORD: minioadmin}
       postgres:
@@ -40,6 +40,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12', cache: pip}
-      - run: pip install -e './services/api[test]'
+      - run: pip install -e './services/api[test]' -e './cli'
       - run: psql "$OPENPROXY_TEST_DSN" -f infra/opensql/init.sql
       - run: pytest tests/integration/rabbitmq tests/integration/storage tests/integration/database -q

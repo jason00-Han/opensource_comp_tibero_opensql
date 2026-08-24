@@ -7,6 +7,10 @@ name = "tibero-doc-api"
 version = "0.1.0"
 description = "Local MVP API for the Tibero Doc platform"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+]
 dependencies = [
     "fastapi>=0.115,<1",
     "python-multipart>=0.0.20,<1",

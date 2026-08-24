@@ -1,4 +1,8 @@
-from tibero_doc.config import build_dsn, runtime_environment
+from tibero_doc.config import DEFAULT_CONFIG, build_dsn, runtime_environment
+
+
+def test_default_pipeline_uses_queue_for_large_document_ingest():
+    assert DEFAULT_CONFIG["pipeline_mode"] == "queue"
 
 
 def test_dsn_password_is_url_encoded():
